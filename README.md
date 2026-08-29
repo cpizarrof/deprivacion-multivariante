@@ -37,7 +37,6 @@ no se sostiene:
 |---|---|
 | `presentacion/` | El código fuente de la presentación (Quarto + reveal.js), su hoja de estilos y la base de datos |
 | `codigo/` | El análisis completo en R y en Python, en el estilo de los códigos del curso |
-| `material/` | Guion de exposición, hoja resumen, guía teórica y notas técnicas |
 | `docs/` | La presentación renderizada, que es lo que publica GitHub Pages |
 
 ---
