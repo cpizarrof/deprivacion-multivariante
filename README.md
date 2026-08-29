@@ -3,7 +3,7 @@
 Análisis multivariante de **4.843 zonas censales urbanas** de Chile (Censo 2017), con
 datos del índice de deprivación territorial.
 
-**[→ Ver la presentación](https://Carloh97.github.io/deprivacion-multivariante/)**
+**[→ Ver la presentación](https://cpizarrof.github.io/deprivacion-multivariante/)**
 
 Trabajo del curso Métodos Multivariantes, Ingeniería Estadística, Universidad de
 Santiago de Chile.
