@@ -1,0 +1,508 @@
+# Tarea 2 - Metodos Multivariantes
+# Grupo 2: Nicole Gana, Carlos Pizarro, Camila Toloza
+# Base: deprivacion, 4843 zonas censales urbanas, Censo 2017
+
+
+# Lectura
+
+import pandas as pd
+import numpy as np
+
+bd = pd.read_csv("datos_sin_geometry.csv", sep=";", decimal=".",
+                 encoding="latin1", index_col=0)
+print(bd.shape)
+print(bd.columns.tolist())
+print(bd.isna().sum().sum())
+
+#los cuatro porcentajes de hacinamiento suman 100, con los cuatro la matriz es singular
+#el indice de deprivacion que viene en la base se guarda para comparar al final
+cols = ["porc_hacinamiento_medio","porc_hacinamiento_alto","porc_hacinamiento_critico",
+        "porc_desocupacion","escolaridad","porc_hog_monop_mujer",
+        "porc_pob_may_vive_sola","porc_pob_ext"]
+X = bd[cols]
+n, p = X.shape
+indice = bd["indice_deprivacion2_norm"]
+
+#macrozonas, se usan como grupos en la inferencia y en correspondencias
+lut = {**dict.fromkeys([15,1,2],"Norte Grande"), **dict.fromkeys([3,4],"Norte Chico"),
+       **dict.fromkeys([5,13,6,7],"Zona Central"),
+       **dict.fromkeys([16,8,9,14,10],"Zona Sur"), **dict.fromkeys([11,12],"Zona Austral")}
+macro = bd["codigo_region"].map(lut)
+print(macro.value_counts())
+
+
+# Descriptiva multivariante
+
+print(X.describe())
+S = X.cov()
+R = X.corr()
+print(R.round(2))
+
+print(np.trace(S))            #varianza total
+print(np.linalg.det(S))       #varianza generalizada
+print(np.linalg.det(R))       #si se acerca a 0 hay variables redundantes
+
+#con las 11 variables originales el determinante casi se anula
+v11 = ["porc_sin_hacinamiento","porc_hacinamiento_medio","porc_hacinamiento_alto",
+       "porc_hacinamiento_critico","hacinamiento","porc_desocupacion","porc_pob_ext",
+       "porc_pob_may_vive_sola","porc_hog_monop_mujer","escolaridad"]
+print(np.linalg.det(bd[v11].corr()))
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.heatmap(R, annot=True, fmt=".2f", cmap="RdBu_r", center=0)
+plt.show()
+
+Rs = X.corr(method="spearman")
+print(Rs.round(2))                          #comprobacion, ordena igual que pearson
+print(np.linalg.eigvalsh(R)[::-1])
+print(np.linalg.eigvalsh(Rs)[::-1])         #los mismos ejes con las dos medidas
+
+#congruencia de Tucker entre las cargas del segundo eje con una y otra medida
+def cong(a, b): return abs(a @ b)/np.sqrt((a @ a)*(b @ b))
+def cargas2(M):
+    ev, V = np.linalg.eigh(M)
+    return V[:, ::-1][:, :2] * np.sqrt(ev[::-1][:2])
+print(cong(cargas2(R.to_numpy())[:,1], cargas2(Rs.to_numpy())[:,1]))
+
+#la correlacion extranjeros-hacinamiento critico es de cola, no un gradiente
+alto = X["porc_pob_ext"] > X["porc_pob_ext"].quantile(0.8)
+print(X.loc[alto, "porc_pob_ext"].corr(X.loc[alto, "porc_hacinamiento_critico"]))
+print(X.loc[~alto, "porc_pob_ext"].corr(X.loc[~alto, "porc_hacinamiento_critico"]))
+
+
+# Distancias y casos atipicos
+
+from sklearn.preprocessing import StandardScaler
+Z = StandardScaler().fit_transform(X)
+
+from scipy.spatial.distance import pdist, squareform
+D = pdist(Z, "euclidean")
+print(D[:5])
+
+D2 = pdist(Z, "minkowski", p=1)
+print(D2.min())
+
+#distancia de mahalanobis respecto al centro
+from sklearn.covariance import EmpiricalCovariance
+from scipy.stats import chi2
+cov = EmpiricalCovariance().fit(X)
+d = cov.mahalanobis(X)
+umbral = chi2.ppf(0.95, df=p)
+print(umbral)
+print((d > umbral).sum())               #cuantas zonas superan el 95%
+print(100*(d > umbral).sum()/n)
+print((d > chi2.ppf(0.999, df=p)).sum())  #las realmente extremas
+
+atip = np.argsort(-d)[:8]
+print(bd["nombre_comuna"].iloc[atip].tolist())
+
+
+# Grafico de estrellas
+
+def star_plot(X, n_rows=2, n_cols=4, scale=True, title="Star Plot"):
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    if scale:
+        X = (X - X.mean()) / X.std()
+
+    labels = X.columns
+    num_vars = len(labels)
+
+    angles = np.linspace(0, 2*np.pi, num_vars, endpoint=False).tolist()
+    angles += angles[:1]
+
+    fig, axes = plt.subplots(n_rows, n_cols, subplot_kw=dict(polar=True))
+    axes = axes.flatten()
+
+    for i, ax in enumerate(axes):
+        if i >= len(X):
+            ax.axis("off")
+            continue
+
+        values = X.iloc[i].tolist()
+        values += values[:1]
+
+        color = plt.cm.rainbow(i / len(X))
+
+        ax.plot(angles, values, color=color)
+        ax.fill(angles, values, color=color, alpha=0.2)
+
+        ax.set_title(X.index[i], size=9)
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels, fontsize=6)
+        ax.set_yticks([])
+
+    plt.suptitle(title)
+    plt.tight_layout()
+    plt.show()
+
+E = X.iloc[atip].copy()
+E.index = bd["nombre_comuna"].iloc[atip]
+star_plot(E, n_rows=2, n_cols=4, title="Zonas mas atipicas")
+
+
+# Normalidad multivariante
+
+#si los datos fueran normales, la mahalanobis seguiria una chi-cuadrado con p gl
+plt.hist(d, bins=50, density=True)
+z = np.linspace(0, d.max(), 300)
+plt.plot(z, chi2.pdf(z, df=p), color="red")
+plt.title("Distancia de Mahalanobis")
+plt.show()
+
+q = chi2.ppf(np.linspace(0.001, 0.999, n), df=p)
+plt.scatter(q, np.sort(d), s=4)
+plt.plot(q, q, color="red")
+plt.title("QQ-plot Mahalanobis")
+plt.show()
+
+#test de Mardia: asimetria y curtosis multivariante
+Xc = np.asarray(X - X.mean())
+Sinv = np.linalg.inv(np.cov(X, rowvar=False))
+b1 = 0.0
+for i in range(0, n, 500):
+    b1 += ((Xc[i:i+500] @ Sinv @ Xc.T)**3).sum()
+b1 = b1/n**2
+b2 = np.mean(d**2)
+est = n*b1/6
+gl = p*(p+1)*(p+2)/6
+print("Asimetria", round(b1,2), "chi2", round(est), "p", chi2.sf(est, gl))
+print("Curtosis", round(b2,1), "esperado", p*(p+2))
+
+
+# Inferencia multivariada
+
+#Hotelling: la Region Metropolitana contra el resto del pais
+from scipy.stats import f as fdist
+g1 = np.asarray(X[bd["codigo_region"] == 13])
+g2 = np.asarray(X[bd["codigo_region"] != 13])
+n1, n2 = len(g1), len(g2)
+Sp = ((n1-1)*np.cov(g1, rowvar=False) + (n2-1)*np.cov(g2, rowvar=False))/(n1+n2-2)
+dif = g1.mean(axis=0) - g2.mean(axis=0)
+T2 = (n1*n2/(n1+n2)) * dif @ np.linalg.inv(Sp) @ dif
+F = (n1+n2-p-1)/(p*(n1+n2-2)) * T2
+print("T2", round(T2), "F", round(F,1), "p", fdist.sf(F, p, n1+n2-p-1))
+print(pd.Series(dif, index=cols).sort_values())
+
+#MANOVA: las cinco macrozonas a la vez
+from statsmodels.multivariate.manova import MANOVA
+datos = X.copy()
+datos["macro"] = macro.values
+man = MANOVA.from_formula(" + ".join(cols) + " ~ macro", data=datos)
+print(man.mv_test())
+
+#elipsoide de confianza, igual que en la Clase 3
+sns.scatterplot(x=X["escolaridad"], y=X["porc_hacinamiento_medio"], color="gray", s=6)
+sns.kdeplot(x=X["escolaridad"], y=X["porc_hacinamiento_medio"], levels=[0.05],
+            color="red", bw_adjust=1.5)
+plt.title("Elipse de confianza 95%")
+plt.show()
+
+#el kdeplot es una aproximacion; la elipse exacta sale de la matriz de covarianza
+from matplotlib.patches import Ellipse
+def elipse(ax, mu, S, t, **kw):
+    ev, V = np.linalg.eigh(S)
+    ang = np.degrees(np.arctan2(V[1,1], V[0,1]))
+    ax.add_patch(Ellipse(mu, 2*t*np.sqrt(ev[1]), 2*t*np.sqrt(ev[0]), angle=ang,
+                         fill=False, **kw))
+
+V2 = X[["escolaridad","porc_hacinamiento_medio"]].to_numpy()
+mu = V2.mean(axis=0)
+Sg = np.cov(V2, rowvar=False)
+
+fig, ax = plt.subplots()
+ax.scatter(V2[:,0], V2[:,1], s=4, color="gray")
+elipse(ax, mu, Sg, np.sqrt(chi2.ppf(0.95, 2)), color="red", lw=2)   #95% de las ZONAS
+#la region para la MEDIA usa S/n y el radio de la formula de la clase:
+#n(xbar-mu)'S^-1(xbar-mu) <= p(n-1)/(n-p) F(p,n-p), aca con p=2
+t = np.sqrt(2*(n-1)/(n-2)*fdist.ppf(0.95, 2, n-2))
+elipse(ax, mu, Sg/n, t, color="green", lw=3)                        #queda diminuta
+plt.xlabel("Escolaridad"); plt.ylabel("Hacinamiento medio")
+plt.show()
+
+#las mismas dos elipses por macrozona, que es lo que va en la presentacion
+orden = ["Norte Grande","Norte Chico","Zona Central","Zona Sur","Zona Austral"]
+fig, ax = plt.subplots()
+for i, gg in enumerate(orden):
+    Xi = V2[(macro == gg).to_numpy()]
+    ni = len(Xi); mi = Xi.mean(axis=0); Si = np.cov(Xi, rowvar=False)
+    elipse(ax, mi, Si, np.sqrt(chi2.ppf(0.95, 2)), color="C%d" % i, lw=1)
+    ti = np.sqrt(2*(ni-1)/(ni-2)*fdist.ppf(0.95, 2, ni-2))
+    elipse(ax, mi, Si/ni, ti, color="C%d" % i, lw=3, label=gg)
+ax.set_xlim(V2[:,0].min(), V2[:,0].max()); ax.set_ylim(V2[:,1].min(), V2[:,1].max())
+plt.xlabel("Escolaridad"); plt.ylabel("Hacinamiento medio"); plt.legend(fontsize=7)
+plt.show()
+#las de la media no se solapan, que es justo lo que detecta el MANOVA
+#las de tolerancia se superponen casi entera: las zonas concretas se mezclan
+
+
+# Componentes principales
+
+from factor_analyzer.factor_analyzer import calculate_kmo, calculate_bartlett_sphericity
+print("KMO", round(calculate_kmo(X)[1], 3))       #tiene que pasar de 0.5
+chi, pv = calculate_bartlett_sphericity(X)
+print("Bartlett", round(chi), "p", pv)            #si se rechaza, hay estructura que reducir
+
+from sklearn.decomposition import PCA
+pca = PCA().fit(Z)                                #Z estandarizado, las unidades son distintas
+lam = pca.explained_variance_
+print(pd.DataFrame({"Valor propio": lam,
+                    "Proporcion": pca.explained_variance_ratio_,
+                    "Acumulado": pca.explained_variance_ratio_.cumsum()}))
+
+plt.plot(range(1, p+1), lam, "o-")                #grafico de codo
+plt.axhline(1, color="red")                       #criterio de kaiser
+plt.xlabel("Componente"); plt.ylabel("Valor propio")
+plt.show()
+
+print(pd.DataFrame(pca.components_[:3].T, index=cols, columns=["CP1","CP2","CP3"]).round(3))
+
+scores = pca.transform(Z)
+plt.scatter(scores[:,0], scores[:,1], s=4, alpha=0.3)
+for j, v in enumerate(cols):
+    plt.arrow(0, 0, 4*pca.components_[0,j], 4*pca.components_[1,j], color="red")
+    plt.text(4.3*pca.components_[0,j], 4.3*pca.components_[1,j], v, fontsize=7)
+plt.title("Biplot")
+plt.show()
+
+#comparacion con el indice que trae la base
+for k in range(3):
+    print("CP"+str(k+1), round(np.corrcoef(scores[:,k], indice)[0,1], 3))
+
+#descomposicion de la varianza de la CP1: cuanto es de adentro y cuanto de afuera
+#es la V_T = V_a + V_e de la Clase 1, aplicada a region, provincia y comuna
+def descomp(y, g):
+    vt = ((y - y.mean())**2).mean()
+    va = pd.Series(y).groupby(g.to_numpy()).apply(lambda v: ((v-v.mean())**2).sum()).sum()/len(y)
+    return round(100*va/vt, 1), round(100*(1-va/vt), 1)
+for k in range(3):
+    print("CP", k+1)
+    for col in ["codigo_region","codigo_provincia","codigo_comuna"]:
+        print("  ", col, descomp(scores[:,k], bd[col]))
+#en la CP1, dentro de la comuna queda el 64.6% de la variabilidad
+#el fenomeno es submunicipal: comparar comunas promedia realidades opuestas
+
+
+# Analisis factorial
+
+from factor_analyzer import FactorAnalyzer
+fa = FactorAnalyzer(n_factors=3, rotation="varimax", method="principal")
+fa.fit(X)
+L = pd.DataFrame(fa.loadings_, index=cols, columns=["F1","F2","F3"])
+print(L.round(3))
+print(pd.DataFrame({"Comunalidad": fa.get_communalities(),
+                    "Varianza_especifica": fa.get_uniquenesses()}, index=cols).round(3))
+print(fa.get_factor_variance())
+
+plt.scatter(L["F1"], L["F2"], s=0)
+for v in cols:
+    plt.text(L.loc[v,"F1"], L.loc[v,"F2"], v, fontsize=7, ha="center")
+plt.axhline(0, ls="--"); plt.axvline(0, ls="--")
+plt.xlabel("Factor 1"); plt.ylabel("Factor 2")
+plt.show()
+
+#estabilidad: se reestiman los factores con la mitad de las zonas y se comparan las cargas
+np.random.seed(2026)
+mitad = np.random.choice(n, n//2, replace=False)
+resto = np.setdiff1d(np.arange(n), mitad)
+LA = FactorAnalyzer(n_factors=3, rotation="varimax", method="principal").fit(X.iloc[mitad]).loadings_
+LB = FactorAnalyzer(n_factors=3, rotation="varimax", method="principal").fit(X.iloc[resto]).loadings_
+for k in range(3):
+    a, b = LA[:,k], LB[:,k]
+    print("Factor", k+1, round(abs(a @ b)/np.sqrt((a@a)*(b@b)), 3))   #cerca de 1, mismos factores
+
+
+# Clustering jerarquico
+
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+enlaces = ["single","complete","average","centroid","ward"]
+arboles = {e: linkage(Z, method=e) for e in enlaces}
+#scipy ya toma el centroide sobre distancias al cuadrado internamente
+
+hc = arboles["ward"]
+dendrogram(hc, no_labels=True, truncate_mode="lastp", p=40)
+plt.ylabel("Distancia")
+plt.title("Ward")
+
+#criterio de mojena, las dos versiones
+h = hc[:,2]
+moj1 = h.mean() + 2.25*h.std(ddof=1)
+ric = np.percentile(h,75) - np.percentile(h,25)
+moj2 = np.median(h) + 2.25*ric/2
+plt.axhline(moj1, color="red")
+plt.axhline(moj2, color="blue")
+plt.show()
+print((h > moj1).sum()+1, (h > moj2).sum()+1)
+#con 4843 zonas las dos reglas dan demasiados grupos, sirven como cota, no como corte
+
+#que hace cada enlace si se corta en 4 grupos
+#se cortan los cinco en el mismo k: comparando enlaces hay que dejar fijo
+#todo lo demas, si no cambiarian por el enlace y por el corte a la vez
+for e in enlaces:
+    print(e, np.bincount(fcluster(arboles[e], 4, criterion="maxclust"))[1:])
+#los cuatro primeros dejan casi todas las zonas en un solo grupo (encadenamiento)
+#ward es el unico que reparte, se sigue con ese
+
+#de donde sale el 4: el grupo mas chico y su % de extranjeros al mover k
+for k in range(2, 9):
+    g = fcluster(hc, k, criterion="maxclust")
+    me = np.bincount(g)[1:].argmin() + 1
+    print(k, np.bincount(g)[1:].min(), round(bd["porc_pob_ext"][g == me].mean(), 1))
+#hasta k=3 el menor son 731 zonas con 12.7% de extranjeros, el enclave sigue mezclado
+#en k=4 pasa a 198 con 29.3% (el pais esta en 4.5%) y en k=5 y 6 ya no cambia
+#en k=7 se rompe en 160 y 38, asi que 4 es el primero que lo aisla y lo deja entero
+
+grupos = fcluster(hc, 4, criterion="maxclust")
+print(np.bincount(grupos)[1:])
+
+perfil = X.groupby(grupos).mean()
+print(perfil.round(2))
+print(indice.groupby(grupos).mean().round(3))   #ordena los grupos de menor a mayor carencia
+
+#el grupo mas chico es el que interesa: pocas zonas, perfil muy distinto
+enclave = np.bincount(grupos)[1:].argmin() + 1
+print(enclave)
+print(bd["nombre_comuna"][grupos == enclave].value_counts().head(6))
+
+
+# Validacion de los conglomerados
+
+from sklearn.metrics import silhouette_score, silhouette_samples
+print(silhouette_score(Z, grupos))
+
+M = squareform(D)
+def dunn(g):
+    inter, intra = np.inf, 0.0
+    for a in np.unique(g):
+        ia = np.where(g == a)[0]
+        intra = max(intra, M[np.ix_(ia, ia)].max())
+        for b in np.unique(g):
+            if b > a:
+                ib = np.where(g == b)[0]
+                inter = min(inter, M[np.ix_(ia, ib)].min())
+    return inter/intra
+print(dunn(grupos))
+
+sil, dun = [], []
+for k in range(2, 11):
+    g = fcluster(hc, k, criterion="maxclust")
+    sil.append(silhouette_score(Z, g))
+    dun.append(dunn(g))
+fig, ax = plt.subplots(2, 1)
+ax[0].plot(range(2,11), sil, "o-"); ax[0].set_ylabel("Silueta")
+ax[1].plot(range(2,11), dun, "o-"); ax[1].set_ylabel("Dunn"); ax[1].set_xlabel("k")
+plt.show()
+#los indices premian k=2, pero con 2 grupos se pierde el enclave, se deja k=4
+
+s = silhouette_samples(Z, grupos)
+plt.bar(range(n), np.concatenate([np.sort(s[grupos==g])[::-1] for g in np.unique(grupos)]))
+plt.axhline(s.mean(), color="red", ls="--")
+plt.title("Perfil de siluetas")
+plt.show()
+
+
+# Clustering particional
+
+from sklearn.cluster import KMeans, MiniBatchKMeans
+km = KMeans(n_clusters=4, n_init=25, random_state=2026).fit(Z)
+print(np.bincount(km.labels_))
+print(silhouette_score(Z, km.labels_))
+
+mb = MiniBatchKMeans(n_clusters=4, n_init=25, random_state=2026).fit(Z)
+print(np.bincount(mb.labels_))
+print(silhouette_score(Z, mb.labels_))
+
+plt.scatter(scores[:,0], scores[:,1], c=km.labels_, s=4, cmap="tab10")
+plt.xlabel("CP1"); plt.ylabel("CP2"); plt.title("k-medias sobre el plano principal")
+plt.show()
+
+#los tres algoritmos frente a frente
+print(pd.crosstab(grupos, km.labels_))
+print(pd.crosstab(grupos, mb.labels_))
+#los particionales parten el grupo grande y se comen el chico, ward conserva el enclave
+
+
+# Analisis de correspondencia
+
+from scipy.stats import chi2_contingency
+Tab = pd.crosstab(macro.values, grupos)
+print(Tab)
+est, pv, gl, esp = chi2_contingency(Tab)
+print("chi2", round(est,1), "gl", gl, "p", pv)
+print("inercia", round(est/Tab.values.sum(), 4))
+
+P = Tab.values/Tab.values.sum()
+fr = P.sum(axis=1); fc = P.sum(axis=0)
+A = np.diag(1/np.sqrt(fr)) @ (P - np.outer(fr, fc)) @ np.diag(1/np.sqrt(fc))
+U, sv, Vt = np.linalg.svd(A)
+print(100*sv**2/np.sum(sv**2))    #porcentaje de inercia por eje
+F = np.diag(1/np.sqrt(fr)) @ U[:, :2] @ np.diag(sv[:2])
+G = np.diag(1/np.sqrt(fc)) @ Vt[:2].T @ np.diag(sv[:2])
+
+for i, lab in enumerate(Tab.index):
+    plt.text(F[i,0], F[i,1], lab, color="steelblue", ha="center")
+for j, lab in enumerate(Tab.columns):
+    plt.text(G[j,0], G[j,1], "G"+str(lab), color="firebrick", ha="center")
+plt.axhline(0, ls="--"); plt.axvline(0, ls="--")
+plt.xlim(-1, 1); plt.ylim(-0.6, 0.6)
+plt.title("Mapa de correspondencias")
+plt.show()
+
+print((100*Tab.div(Tab.sum(axis=1), axis=0)).round(1))   #perfil de cada macrozona
+
+
+# Clasificacion supervisada
+
+#se predice el enclave con las 8 variables
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_predict
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import confusion_matrix, roc_curve, roc_auc_score
+
+y = (grupos == enclave).astype(int)
+print(np.bincount(y))
+
+modelo = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
+modelo.fit(X, y)
+prob = modelo.predict_proba(X)[:,1]
+t0 = confusion_matrix(y, (prob > 0.5).astype(int))
+print(t0)
+print(np.trace(t0)/t0.sum())
+
+#validacion cruzada, para no evaluar con los mismos datos con que se ajusto
+prob = cross_val_predict(modelo, X, y, cv=10, method="predict_proba")[:,1]
+fpr, tpr, umb = roc_curve(y, prob)
+auc = roc_auc_score(y, prob)
+print("AUC", round(auc, 3))
+
+#la matriz de confusion en los dos cortes que van en la lamina
+def corte(u):
+    t0 = confusion_matrix(y, (prob >= u).astype(int))
+    print("umbral", round(u,4),
+          " sens", round(100*t0[1,1]/t0[1].sum(),1),
+          " esp", round(100*t0[0,0]/t0[0].sum(),1),
+          " acierto", round(100*np.trace(t0)/t0.sum(),1))
+    print(t0)
+
+j = np.argmax(tpr - fpr)      #punto de Youden: maximiza sensibilidad + especificidad - 1
+corte(umb[j])
+corte(0.5)                    #corte estricto: prioriza evitar falsas alarmas
+
+#lo mismo usando como unico predictor el indice de deprivacion de la base
+X1 = indice.to_frame()
+prob1 = cross_val_predict(modelo, X1, y, cv=10, method="predict_proba")[:,1]
+fpr1, tpr1, umb1 = roc_curve(y, prob1)
+auc1 = roc_auc_score(y, prob1)
+print("AUC", round(auc1, 3))
+j1 = np.argmax(tpr1 - fpr1)
+print("sensibilidad", round(tpr1[j1],3), "especificidad", round(1-fpr1[j1],3))
+
+plt.plot(fpr, tpr, label="8 variables (AUC "+str(round(auc,3))+")")
+plt.plot(fpr1, tpr1, color="red", label="solo el indice (AUC "+str(round(auc1,3))+")")
+plt.plot([0,1], [0,1], ls="--", color="gray")
+plt.xlabel("1 - especificidad"); plt.ylabel("sensibilidad")
+plt.legend()
+plt.show()
+#el indice por si solo no separa el enclave, las 8 variables si

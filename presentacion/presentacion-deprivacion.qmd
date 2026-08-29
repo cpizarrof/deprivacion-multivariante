@@ -1,0 +1,2425 @@
+---
+title: "La deprivación urbana en Chile no<br>es unidimensional"
+subtitle: "Estructura multivariante de 4.843 zonas censales urbanas: exploración, reducción de dimensiones, inferencia y clasificación"
+author: "Nicole Gana · Carlos Pizarro · Camila Toloza"
+date: "2026-08-28"
+lang: es
+format:
+  revealjs:
+    theme: [default, tema-deprivacion.scss]
+    width: 1280
+    height: 720
+    margin: 0.08
+    center: false
+    slide-number: c/t
+    progress: true
+    history: true
+    transition: fade
+    background-transition: fade
+    controls: true
+    hash: true
+    embed-resources: true
+    fig-align: center
+    # OJO: aquí NO va `keyboard:`. Quarto valida ese campo como true/false y
+    # rechaza la forma de objeto de reveal.js ({83: false}); y `keyboard: false`
+    # a secas apagaría TODA la navegación con teclado. La vista de expositor se
+    # desactiva más abajo, en include-after-body, que además es más seguro.
+    include-in-header:
+      - text: |
+          <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+    include-after-body:
+      - text: |
+          <script>
+          // Desactiva la vista de expositor por completo. Tres puertas de
+          // entrada: la tecla S, la entrada del menú y la fila del panel de
+          // ayuda (?). Se cierran las tres desde aquí. El `keydown` va en fase
+          // de CAPTURA, así que se traga la S antes de que reveal.js la vea, y
+          // respeta los campos de texto (el deslizador de la lámina 17).
+          (function () {
+            document.addEventListener('keydown', function (e) {
+              if (e.key !== 's' && e.key !== 'S') return;
+              if (e.ctrlKey || e.metaKey || e.altKey) return;
+              var t = e.target || {};
+              if (t.isContentEditable ||
+                  /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '')) return;
+              e.stopImmediatePropagation();
+              e.preventDefault();
+            }, true);
+
+            function limpiar() {
+              var patron = /speaker|notes|expositor|notas del/i;
+              document.querySelectorAll(
+                '.slide-menu-item, .slide-menu-item-vertical, li, tr'
+              ).forEach(function (el) {
+                if (el.dataset && el.dataset.limpio) return;
+                var txt = (el.textContent || '');
+                if (patron.test(txt) && txt.length < 60) {
+                  el.style.display = 'none';
+                  if (el.dataset) el.dataset.limpio = '1';
+                }
+              });
+            }
+            if (document.readyState !== 'loading') setTimeout(limpiar, 400);
+            else document.addEventListener('DOMContentLoaded', function () {
+              setTimeout(limpiar, 400);
+            });
+            document.addEventListener('click', function () { setTimeout(limpiar, 120); });
+          })();
+          </script>
+execute:
+  echo: false
+  warning: false
+  message: false
+  cache: false   # Global apagado a propósito. Ver la nota del chunk `setup`:
+                 # se cachean SÓLO los chunks de cálculo, nunca los de figuras.
+knitr:
+  opts_chunk:
+    dev: "ragg_png"
+    dpi: 300
+    fig.retina: 1   # NO subir a 2: multiplica el dpi real del dispositivo
+                    # y descuadra showtext (ver la nota del chunk `setup`)
+---
+
+```{r setup}
+#| include: false
+# ---------------------------------------------------------------------------
+#  MODO DE RENDER  <- la única línea que hay que tocar para iterar rápido
+#
+#  "borrador": dibuja a 110 dpi. Render completo en ~25 s (con caché caliente).
+#              Úsalo mientras ajustas colores, tamaños de letra y layout.
+#  "final"   : dibuja a 300 dpi. Úsalo para exportar el PDF y para entregar.
+#
+#  Las proporciones son IDÉNTICAS en los dos modos: sólo cambia la nitidez.
+#
+#  El primer render es más lento (~3 min) porque calcula las siluetas sobre las
+#  4.843 zonas y las validaciones cruzadas de los cuatro clasificadores. Esos
+#  dos chunks quedan cacheados, así que a partir del segundo render el costo
+#  vuelve a ser el de dibujar las figuras.
+# ---------------------------------------------------------------------------
+MODO <- "final"          # <<<<<< cambiar a "borrador" para iterar
+
+dpi_render <- if (MODO == "borrador") 110 else 300
+
+# fig.retina se deja SIEMPRE en 1. knitr lo implementa multiplicando el dpi del
+# dispositivo (retina 2 + dpi 300 = 600 dpi reales) pero declarando en el HTML
+# el ancho sin multiplicar. showtext rasteriza la tipografía usando el dpi que
+# se le pasa, así que si no coincide con el del dispositivo el texto sale a otra
+# escala que el resto del gráfico. A 300 dpi ya hay ~3x de sobremuestreo.
+knitr::opts_chunk$set(echo = FALSE, dpi = dpi_render, fig.retina = 1)
+
+# ---------------------------------------------------------------------------
+#  CACHÉ: regla inviolable
+#
+#  Los chunks que producen FIGURAS nunca se cachean. Al reproducir un chunk
+#  cacheado knitr reescribe la ruta del PNG pero NO regenera el archivo, y
+#  Quarto ya limpió la carpeta *_files: los gráficos desaparecen sin dar error.
+#  Sólo llevan `#| cache: true` chunks de cálculo puro, sin imágenes.
+# ---------------------------------------------------------------------------
+
+library(tidyverse)
+library(knitr)
+library(gt)
+library(psych)      # KMO, Bartlett, análisis factorial
+library(cluster)    # silhouette, clara
+library(ggrepel)
+library(showtext)
+library(ragg)
+
+sysfonts::font_add_google("Montserrat", "Montserrat")
+showtext_auto()
+showtext_opts(dpi = dpi_render)   # mismo dpi que el dispositivo: obligatorio
+
+# ---- Paleta: azul navy + arena + cobre (coincide con el .scss) ----
+azul      <- "#1C3D6E"
+azul_prof <- "#0E2446"
+azul_tint <- "#E5EAF3"
+arena      <- "#FAF7F0"
+panel_bg   <- "#FFFFFF"
+tinta      <- "#1B2330"
+pizarra    <- "#5C687A"   # series categóricas y línea de eje
+grafito    <- "#3B4657"   # texto secundario (coincide con el .scss)
+linea      <- "#DCD5C5"
+cobre      <- "#B4652A"
+cobre_osc  <- "#8C4A18"
+pal4       <- c(azul, cobre, "#7C93B5", "#D9A566")
+# Paleta de hasta 8 grupos, para el explorador interactivo de k
+pal8 <- c(azul, cobre, "#7C93B5", "#D9A566", pizarra, "#6E9E7E", "#9E6E8E", "#3F7C8C")
+
+# ---- Tema ggplot común a todos los gráficos ----
+tema_dep <- function(base_size = 15, angulo_x = 0) {
+  theme_minimal(base_size = base_size, base_family = "Montserrat") +
+    theme(
+      plot.background    = element_rect(fill = arena, color = NA),
+      panel.background   = element_rect(fill = arena, color = NA),
+      panel.grid.minor   = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.major.y = element_line(color = linea, linewidth = 0.35),
+      axis.line.x  = element_line(color = pizarra, linewidth = 0.4),
+      axis.ticks   = element_blank(),
+      axis.text    = element_text(color = tinta, size = rel(1), face = "plain"),
+      axis.text.x  = element_text(angle = angulo_x,
+                                  hjust = if (angulo_x > 0) 1 else 0.5),
+      axis.title   = element_text(color = tinta, size = rel(1.05), face = "bold"),
+      strip.background = element_blank(),
+      strip.text   = element_text(color = azul, face = "bold", hjust = 0),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      legend.text  = element_text(color = tinta),
+      plot.margin  = margin(10, 16, 10, 6)
+    )
+}
+
+# ---- Tema gt común a todas las tablas ----
+tabla_dep <- function(datos, ..., size = 17, padding = 5) {
+  gt(datos, ...) |>
+    opt_table_font(font = list("Montserrat", default_fonts())) |>
+    tab_options(
+      table.background.color            = panel_bg,
+      table.font.color                  = tinta,
+      table.font.size                   = px(size),
+      table.border.top.color            = azul,
+      table.border.top.width            = px(2),
+      table.border.bottom.color         = azul,
+      table.border.bottom.width         = px(2),
+      column_labels.background.color    = panel_bg,
+      column_labels.font.weight         = "700",
+      column_labels.text_transform      = "uppercase",
+      column_labels.font.size           = px(max(12, round(size * 0.72))),
+      column_labels.border.bottom.color = azul,
+      column_labels.border.bottom.width = px(1.5),
+      table_body.hlines.color           = linea,
+      row_group.background.color        = azul_tint,
+      row_group.font.weight             = "700",
+      data_row.padding                  = px(padding),
+      heading.align                     = "left"
+    ) |>
+    tab_style(style = cell_text(color = azul), locations = cells_column_labels()) |>
+    tab_style(style = cell_text(color = azul_prof, weight = "700"),
+              locations = cells_row_groups())
+}
+
+fmt_p <- function(p) if (p < 2e-16) "< 2e-16" else formatC(p, format = "e", digits = 2)
+
+# Coma decimal para los rótulos de los gráficos (en el texto la ponen las
+# expresiones en línea; en ggplot hay que escribirla a mano).
+coma <- function(x, d = 1) sub("\\.", ",", formatC(x, format = "f", digits = d))
+
+# ---- Gráfico de estrellas / radar (estilo Clase 2) ----
+radar_dep <- function(mat, etiquetas, colores, base_size = 13) {
+  k <- ncol(mat); ang <- seq(0, 2 * pi, length.out = k + 1)[1:k]
+  rg <- range(mat); r01 <- (mat - rg[1]) / diff(rg) * 0.78 + 0.22
+  poly <- map_dfr(seq_len(nrow(mat)), function(i)
+    tibble(grupo = rownames(mat)[i],
+           x = r01[i, ] * sin(ang), y = r01[i, ] * cos(ang)))
+  ejes <- tibble(x = sin(ang), y = cos(ang), lab = etiquetas)
+  circ <- map_dfr(c(0.22, 0.61, 1), function(rr)
+    tibble(r = rr, t = seq(0, 2 * pi, length.out = 180)) |>
+      mutate(x = rr * sin(t), y = rr * cos(t)))
+  ggplot() +
+    geom_path(data = circ, aes(x, y, group = r), color = linea, linewidth = 0.3) +
+    geom_segment(data = ejes, aes(x = 0, y = 0, xend = x, yend = y),
+                 color = linea, linewidth = 0.3) +
+    geom_polygon(data = poly, aes(x, y, fill = grupo, color = grupo),
+                 alpha = 0.17, linewidth = 0.85) +
+    geom_text(data = ejes, aes(x * 1.20, y * 1.20, label = lab),
+              family = "Montserrat", fontface = "bold", size = 4.5,
+              color = tinta, lineheight = 0.92) +
+    scale_fill_manual(values = colores) + scale_color_manual(values = colores) +
+    coord_equal(clip = "off", xlim = c(-1.45, 1.45), ylim = c(-1.3, 1.3)) +
+    theme_void(base_size = base_size, base_family = "Montserrat") +
+    theme(plot.background = element_rect(fill = arena, color = NA),
+          legend.position = "bottom", legend.title = element_blank(),
+          legend.text = element_text(color = tinta, size = rel(1.12),
+                                     face = "bold"))
+}
+
+```
+
+```{r datos}
+#| cache: true
+bd <- read.csv("datos_sin_geometry.csv", sep = ";", dec = ".",
+               fileEncoding = "latin1", row.names = 1, stringsAsFactors = FALSE)
+
+etiquetas <- c(
+  porc_hacinamiento_medio   = "Hacinamiento medio",
+  porc_hacinamiento_alto    = "Hacinamiento alto",
+  porc_hacinamiento_critico = "Hacinamiento crítico",
+  porc_desocupacion         = "Desocupación",
+  escolaridad               = "Escolaridad",
+  porc_hog_monop_mujer      = "Hogares monop. mujer",
+  porc_pob_may_vive_sola    = "Pob. mayor vive sola",
+  porc_pob_ext              = "Población extranjera",
+  porc_sin_hacinamiento     = "Sin hacinamiento",
+  hacinamiento              = "Índice hacinamiento")
+
+et_corta <- c("Hacinam.\nmedio", "Hacinam.\nalto", "Hacinam.\ncrítico",
+              "Desocu-\npación", "Escola-\nridad", "Hogares\nmonop.",
+              "Mayores\nsolos", "Población\nextranjera")
+
+macro_lut <- c("15" = "Norte Grande", "1" = "Norte Grande", "2" = "Norte Grande",
+               "3" = "Norte Chico",  "4" = "Norte Chico",
+               "5" = "Zona Central", "13" = "Zona Central",
+               "6" = "Zona Central", "7"  = "Zona Central",
+               "16" = "Zona Sur", "8" = "Zona Sur", "9" = "Zona Sur",
+               "14" = "Zona Sur", "10" = "Zona Sur",
+               "11" = "Zona Austral", "12" = "Zona Austral")
+orden_macro <- c("Norte Grande", "Norte Chico", "Zona Central",
+                 "Zona Sur", "Zona Austral")
+bd$macrozona <- factor(macro_lut[as.character(bd$codigo_region)], levels = orden_macro)
+
+# Conjunto analítico final (la justificación va en la lámina 3)
+V8 <- c("porc_hacinamiento_medio", "porc_hacinamiento_alto",
+        "porc_hacinamiento_critico", "porc_desocupacion", "escolaridad",
+        "porc_hog_monop_mujer", "porc_pob_may_vive_sola", "porc_pob_ext")
+
+X <- bd[, V8]
+n <- nrow(X); p <- ncol(X)
+S <- cov(X); R <- cor(X); Z <- scale(X)
+```
+
+## {background-color="#FAF7F0"}
+
+::: {.hook-slide style="height:auto;"}
+<span class="tag tag-desc">El problema</span>
+
+<p class="hook-line-sm">Dos zonas con el <em>mismo</em> índice de deprivación pueden ser <em>mundos</em> distintos.</p>
+:::
+
+::: {.fragment .fade-up}
+Chile mide la carencia territorial con **índices de una sola dimensión**: un número por zona que ordena de menos a más carenciada. Es cómodo para priorizar, pero obliga a comprimir en una escala fenómenos que quizá no van juntos. Un barrio del centro de Santiago con hacinamiento extremo y población migrante puede recibir la misma nota que una periferia con desempleo y jefatura femenina.
+:::
+
+::: {.fragment .fade-up}
+<div class="stat-hero" style="margin-top:0.4em;">
+  <span class="valor">4.843</span>
+  <span class="etiqueta">zonas censales urbanas de Chile, con 11 indicadores sociodemográficos del Censo 2017</span>
+</div>
+:::
+
+<span class="ghost-number">4.843</span>
+
+
+## <span class="section-kicker">01 · Contexto</span>La base de datos {.smaller}
+
+:::: {.columns}
+::: {.column width="52%"}
+```{r tabla-variables}
+tibble::tribble(
+  ~Dimensión, ~Variable, ~Definición,
+  "Vivienda", "Sin hacinamiento",     "% de hogares sin hacinamiento",
+  "Vivienda", "Hacinamiento medio",   "% de hogares con hacinamiento medio",
+  "Vivienda", "Hacinamiento alto",    "% de hogares con hacinamiento alto",
+  "Vivienda", "Hacinamiento crítico", "% de hogares con hacinamiento crítico",
+  "Vivienda", "Índice hacinamiento",  "Resumen del hacinamiento de la zona",
+  "Educación", "Escolaridad",         "Años promedio de escolaridad",
+  "Empleo",    "Desocupación",        "% de población desocupada",
+  "Cohesión social", "Población extranjera", "% de población extranjera",
+  "Cohesión social", "Pob. mayor vive sola", "% de población mayor que vive sola",
+  "Cohesión social", "Hogares monop. mujer", "% de hogares monoparentales con jefa mujer",
+  "Síntesis",  "Índice de deprivación", "Índice normalizado (0–1) provisto con la base"
+) |>
+  tabla_dep(groupname_col = "Dimensión", size = 15, padding = 3) |>
+  cols_align(align = "left", columns = everything()) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Variable))
+```
+:::
+::: {.column width="46%"}
+```{r cobertura}
+#| fig.width: 5.2
+#| fig.height: 2.5
+bd |>
+  count(macrozona) |>
+  ggplot(aes(fct_rev(macrozona), n)) +
+  geom_col(fill = azul, width = 0.6) +
+  geom_text(aes(label = format(n, big.mark = ".", decimal.mark = ",")), hjust = -0.15,
+            family = "Montserrat", color = pizarra, size = 4) +
+  coord_flip() +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.2))) +
+  labs(x = NULL, y = "Zonas censales urbanas") +
+  tema_dep(base_size = 14) +
+  theme(axis.text.y = element_text(face = "bold", color = tinta),
+        panel.grid.major.y = element_blank())
+```
+
+<div class="stat-row">
+  <div class="stat-box"><span class="v">16</span><span class="k">regiones</span></div>
+  <div class="stat-box"><span class="v">56</span><span class="k">provincias</span></div>
+  <div class="stat-box"><span class="v">319</span><span class="k">comunas</span></div>
+</div>
+
+```{r depuracion}
+V_todas <- c("porc_sin_hacinamiento", "porc_hacinamiento_medio",
+             "porc_hacinamiento_alto", "porc_hacinamiento_critico",
+             "hacinamiento", "porc_desocupacion", "porc_pob_ext",
+             "porc_pob_may_vive_sola", "porc_hog_monop_mujer", "escolaridad")
+R_todas  <- cor(bd[, V_todas])
+ev_todas <- eigen(R_todas)$values
+
+# El índice provisto está construido a partir de estas mismas variables
+V_tesis   <- c("porc_hacinamiento_medio", "porc_desocupacion",
+               "escolaridad", "porc_hog_monop_mujer")
+acp_tesis <- prcomp(bd[, V_tesis], scale. = TRUE)
+sc1 <- acp_tesis$x[, 1]
+if (cor(sc1, bd$indice_deprivacion2_norm) < 0) sc1 <- -sc1
+r_ind <- cor(sc1, bd$indice_deprivacion2_norm)
+```
+
+::: {.panel-invertido .fragment .fade-up}
+**Se trabaja con 8 de las 11.** Los cuatro porcentajes de hacinamiento suman 100. El índice provisto se reserva como **validación externa**.
+:::
+:::
+::::
+
+
+## <span class="section-kicker">02 · Pregunta y objetivos</span>Qué queremos responder {.smaller}
+
+::: {.panel-invertido}
+**¿Basta una sola dimensión para describir la situación socioterritorial de las zonas urbanas de Chile, o existen perfiles distintos que un índice escalar no logra separar?**
+:::
+
+:::: {.columns}
+::: {.column width="46%"}
+::: {.card .amplia .fragment .fade-up}
+<span class="concepto">Hipótesis 1</span>
+La estructura de correlaciones requiere **más de una** componente para representarse adecuadamente.
+:::
+::: {.card .amplia .fragment .fade-up .cobre}
+<span class="concepto">Hipótesis 2</span>
+Existen perfiles territoriales sustantivamente distintos que el índice unidimensional **no distingue**.
+:::
+::: {.card .amplia .fragment .fade-up}
+<span class="concepto">Hipótesis 3</span>
+La variabilidad es sobre todo **intracomunal**: las divisiones administrativas explican poco.
+:::
+:::
+::: {.column width="52%"}
+::: {.roadmap-item .fragment .fade-up}
+<span class="num">01</span> Describir la variabilidad, la asociación y los casos atípicos.
+<span class="destino">→ Descriptiva y gráficos</span>
+:::
+::: {.roadmap-item .fragment .fade-up}
+<span class="num">02</span> Reducir la dimensión e interpretar los ejes obtenidos.
+<span class="destino">→ ACP</span>
+:::
+::: {.roadmap-item .fragment .fade-up}
+<span class="num">03</span> Confirmar y nombrar la estructura latente.
+<span class="destino">→ Análisis factorial</span>
+:::
+::: {.roadmap-item .fragment .fade-up}
+<span class="num">04</span> Contrastar si los territorios difieren.
+<span class="destino">→ $T^2$ y MANOVA</span>
+:::
+::: {.roadmap-item .fragment .fade-up}
+<span class="num">05</span> Construir una tipología de zonas y validarla.
+<span class="destino">→ Clustering</span>
+:::
+::: {.roadmap-item .fragment .fade-up}
+<span class="num">06</span> Relacionar tipología y territorio.
+<span class="destino">→ Correspondencias</span>
+:::
+::: {.roadmap-item .fragment .fade-up}
+<span class="num">07</span> Medir cuánta información pierde el índice.
+<span class="destino">→ Clasificación supervisada</span>
+:::
+:::
+::::
+
+
+## <span class="section-kicker">03 · Metodología</span>Qué técnica y por qué {.smaller}
+
+```{r tabla-metodos}
+tibble::tribble(
+  ~Objetivo, ~`Técnica elegida`, ~`También se probó`,
+  "Explorar",                     "S, R, Mahalanobis, gráfico de estrellas", "Spearman frente a Pearson",
+  "Reducir la dimensión",         "Componentes principales sobre R",         "Kaiser, codo y % de varianza",
+  "Nombrar la estructura",        "Factorial · factor principal + Varimax",  "Máxima verosimilitud; 2 factores",
+  "Comparar territorios",         "T² de Hotelling y MANOVA",                "Λ de Wilks y traza de Pillai",
+  "Agrupar zonas",                "No supervisada · Ward, k = 4",            "4 enlaces, k-medias, CLARA, k de 2 a 8",
+  "Relacionar con el territorio", "Correspondencia simple",                  "Perfiles fila y columna",
+  "Medir la predictibilidad",     "Regresión logística + curva ROC",         "8 variables frente a sólo el índice"
+) |>
+  tabla_dep(size = 21, padding = 10) |>
+  cols_align(align = "left", columns = everything()) |>
+  cols_width(Objetivo ~ px(230), `Técnica elegida` ~ px(400)) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Objetivo)) |>
+  tab_style(style = cell_text(color = cobre_osc, weight = "600"),
+            locations = cells_body(columns = `Técnica elegida`))
+```
+
+::: {.fragment .fade-up}
+::: {.panel-invertido}
+**Ninguna decisión se tomó por defecto.** En total se evaluaron 2 medidas de correlación, 2 métodos de estimación factorial, **5 métodos de enlace**, 3 algoritmos de conglomerados, 7 valores de $k$ y 2 conjuntos de predictores.
+:::
+:::
+
+
+## <span class="section-kicker">04 · Exploración</span>Descriptiva y medidas de variabilidad {.smaller}
+
+```{r descriptivos}
+desc <- tibble(
+  Variable  = unname(etiquetas[V8]),
+  Media     = sapply(X, mean),
+  Mediana   = sapply(X, median),
+  DE        = sapply(X, sd),
+  CV        = sapply(X, sd) / sapply(X, mean),
+  Mínimo    = sapply(X, min),
+  Máximo    = sapply(X, max),
+  Asimetría = sapply(X, function(v) mean((v - mean(v))^3) / sd(v)^3))
+var_total <- sum(diag(S)); var_gen <- det(S); var_efec <- det(R)
+```
+
+```{r tabla-descriptivos}
+desc |>
+  tabla_dep(size = 16, padding = 4) |>
+  fmt_number(columns = -Variable, decimals = 2) |>
+  cols_align(align = "center", columns = -Variable) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Variable)) |>
+  data_color(columns = Asimetría, palette = c(azul_tint, "#E8D9C4", cobre),
+             domain = c(0, 5.4))
+```
+
+:::: {.columns}
+::: {.column width="50%"}
+<div class="stat-row holgada">
+  <div class="stat-box"><span class="v">`r round(var_total, 1)`</span><span class="k">varianza total<br>(traza de S)</span></div>
+  <div class="stat-box"><span class="v">`r round(var_gen, 0)`</span><span class="k" style="display: block; text-align: center;">varianza generalizada<br>|S|</span></div>
+  <div class="stat-box acento"><span class="v">`r round(1 - var_efec, 3)`</span><span class="k">redundancia 1 − |R|</span></div>
+</div>
+:::
+::: {.column width="48%"}
+::: {.card .amplia .cobre}
+<span class="concepto">Qué mide cada una, y qué decidimos</span>
+La **traza** suma por separado; el **determinante de S** toma en cuenta que las variables van juntas; el de $\mathbf{R}$ se lee al revés, como **información repetida**.
+<br>Escalas incomparables ⟶ **estandarizar**. <br>Redundancia `r round(1 - var_efec, 3)` ⟶ **hay estructura que reducir**.
+:::
+:::
+::::
+
+
+## La estructura de asociación {.smaller .densa}
+
+<span class="tag tag-desc">Exploración · Matriz de correlaciones</span>
+
+:::: {.columns}
+::: {.column width="57%"}
+```{r spearman}
+# Segunda medida de asociación: Spearman. Es la correlación de Pearson sobre los
+# RANGOS, así que capta relaciones monótonas y no sólo lineales, y es insensible
+# a los valores extremos. Comparar las dos es la comprobación de robustez.
+Rs <- cor(X, method = "spearman")
+cong <- function(a, b) sum(a * b) / sqrt(sum(a^2) * sum(b^2))
+ep <- eigen(R)$values; es <- eigen(Rs)$values
+cg <- function(M) { v <- eigen(M); L <- v$vectors[, 1:2] %*% diag(sqrt(v$values[1:2]))
+  rownames(L) <- V8
+  if (L["escolaridad", 1] > 0)  L[, 1] <- -L[, 1]
+  if (L["porc_pob_ext", 2] < 0) L[, 2] <- -L[, 2]; L }
+Lp <- cg(R); Ls <- cg(Rs)
+tuck2 <- cong(Lp[, 2], Ls[, 2])
+sel_alto <- X$porc_pob_ext > quantile(X$porc_pob_ext, 0.8)
+r_alto <- cor(X$porc_pob_ext[sel_alto], X$porc_hacinamiento_critico[sel_alto])
+r_bajo <- cor(X$porc_pob_ext[!sel_alto], X$porc_hacinamiento_critico[!sel_alto])
+```
+
+```{r datos-matriz}
+#| results: asis
+# Las dos matrices 8x8 completas se serializan a JavaScript para poder
+# conmutar entre ellas sin volver a dibujar en R.
+et_hm <- c("Hacinam. medio", "Hacinam. alto", "Hacinam. crítico",
+           "Desocupación", "Escolaridad", "Hogares monop.",
+           "Mayores solos", "Pobl. extranjera")
+js_mat <- function(M) paste0("[",
+  paste(apply(M, 1, function(f) paste0("[", paste(round(f, 3), collapse = ","), "]")),
+        collapse = ","), "]")
+cat(sprintf('<script>window.MAT={et:%s,P:%s,S:%s};</script>',
+            paste0("[\"", paste(et_hm, collapse = "\",\""), "\"]"),
+            js_mat(R), js_mat(Rs)))
+```
+
+```{=html}
+<div class="conmuta">
+<button id="mb-p" class="activo" onclick="matriz('P')">Pearson</button>
+<button id="mb-s" onclick="matriz('S')">Spearman</button>
+<span class="conmuta-pie" id="mb-pie">Correlación lineal sobre los valores</span>
+</div>
+<div id="mat-lienzo"></div>
+```
+
+```{=html}
+<script>
+(function () {
+var COBRE = [180, 101, 42], ARENA = [250, 247, 240], AZUL = [28, 61, 110];
+function mezcla(a, b, t) {
+  return "rgb(" + Math.round(a[0] + (b[0] - a[0]) * t) + "," +
+                  Math.round(a[1] + (b[1] - a[1]) * t) + "," +
+                  Math.round(a[2] + (b[2] - a[2]) * t) + ")";
+}
+function tono(r) { return r < 0 ? mezcla(ARENA, COBRE, -r) : mezcla(ARENA, AZUL, r); }
+function num(r) { return (r < 0 ? "−" : "") + Math.abs(r).toFixed(2).replace(".", ","); }
+function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+var W = 706, H = 436, ML = 146, MT = 36, CW = 68, CH = 38;
+
+function dibujar(M) {
+  var n = M.length, s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" ' +
+          'role="img" aria-label="Matriz de correlaciones">';
+  // barra de color
+  s += '<defs><linearGradient id="mg" x1="0" x2="1">' +
+       '<stop offset="0" stop-color="rgb(180,101,42)"/>' +
+       '<stop offset="0.5" stop-color="rgb(250,247,240)"/>' +
+       '<stop offset="1" stop-color="rgb(28,61,110)"/></linearGradient></defs>';
+  s += '<rect x="' + ML + '" y="6" width="200" height="11" fill="url(#mg)" ' +
+       'stroke="#DCD5C5"/>';
+  s += '<text x="' + (ML - 6) + '" y="16" text-anchor="end" font-size="14" ' +
+       'font-weight="700" fill="#8C4A18">−1,0 inversa</text>';
+  s += '<text x="' + (ML + 208) + '" y="16" font-size="14" font-weight="700" ' +
+       'fill="#1C3D6E">+1,0 directa</text>';
+  for (var i = 0; i < n; i++) {
+    var y = MT + i * CH;
+    s += '<text x="' + (ML - 10) + '" y="' + (y + CH / 2 + 5) + '" ' +
+         'text-anchor="end" font-size="15" font-weight="700" fill="#1B2330">' +
+         esc(window.MAT.et[i]) + '</text>';
+    for (var j = 0; j < n; j++) {
+      var x = ML + j * CW, r = M[i][j];
+      s += '<rect x="' + x + '" y="' + y + '" width="' + (CW - 2) + '" height="' +
+           (CH - 2) + '" fill="' + tono(r) + '" stroke="#FAF7F0" stroke-width="2"/>';
+      s += '<text x="' + (x + (CW - 2) / 2) + '" y="' + (y + CH / 2 + 5) +
+           '" text-anchor="middle" font-size="15" font-weight="700" fill="' +
+           (Math.abs(r) > 0.45 ? "#FFFFFF" : "#1B2330") + '">' + num(r) + '</text>';
+    }
+  }
+  var yb = MT + n * CH + 12;
+  for (var j2 = 0; j2 < n; j2++) {
+    var xb = ML + j2 * CW + CW / 2;
+    s += '<text x="' + xb + '" y="' + yb + '" font-size="15" font-weight="700" ' +
+         'fill="#1B2330" text-anchor="end" transform="rotate(-38 ' + xb + ' ' +
+         yb + ')">' + esc(window.MAT.et[j2]) + '</text>';
+  }
+  return s + '</svg>';
+}
+
+window.matriz = function (tipo) {
+  var caja = document.getElementById("mat-lienzo");
+  if (!caja || !window.MAT) return;
+  caja.innerHTML = dibujar(tipo === "S" ? window.MAT.S : window.MAT.P);
+  var bp = document.getElementById("mb-p"), bs = document.getElementById("mb-s"),
+      pie = document.getElementById("mb-pie");
+  if (bp) bp.className = tipo === "S" ? "" : "activo";
+  if (bs) bs.className = tipo === "S" ? "activo" : "";
+  if (pie) pie.textContent = tipo === "S"
+    ? "Correlación sobre los rangos: capta relaciones monótonas, no sólo lineales"
+    : "Correlación lineal sobre los valores";
+};
+
+var intentos = 0;
+(function esperar() {
+  if (document.getElementById("mat-lienzo") && window.MAT) {
+    window.matriz("P");
+  } else if (++intentos < 40) {
+    setTimeout(esperar, 250);
+  }
+})();
+})();
+</script>
+```
+
+<p class="nota-fuente">Las dos coinciden en lo estructural</p>
+:::
+::: {.column width="41%"}
+::: {.card .amplia .fragment .fade-up}
+<span class="concepto">Lo esperable</span>
+Hacinamiento medio y alto ($0{,}73$) y desocupación<br>($0{,}50$) frente a escolaridad ($-0{,}65$):<br>el núcleo clásico de la carencia.
+:::
+::: {.card .amplia .fragment .fade-up .cobre}
+<span class="concepto">Lo que no encaja</span>
+Hacinamiento crítico va con población extranjera<br>(**$0{,}52$**), pero ésta va con **más** escolaridad ($+0{,}37$).
+<br>Ese patrón **no cabe** en un solo eje de carencia.
+:::
+::: {.card .amplia .fragment .fade-up}
+<span class="concepto">Y es una asociación de cola</span>
+`r round(r_bajo,2)` en el 80 % de zonas con menos extranjeros;<br> `r round(r_alto,2)` en el 20 % superior. Existe **sólo donde hay presencia migrante**.
+:::
+:::
+::::
+
+
+## Perfiles territoriales: gráfico de estrellas {.smaller}
+
+<span class="tag tag-desc">Análisis gráfico multivariante</span>
+
+:::: {.columns}
+::: {.column width="52%"}
+```{r radar-macro}
+#| fig.width: 6.0
+#| fig.height: 4.9
+m_macro <- as.matrix(aggregate(Z, by = list(bd$macrozona), FUN = mean)[, -1])
+rownames(m_macro) <- orden_macro
+radar_dep(m_macro, et_corta,
+          c("Norte Grande" = cobre, "Norte Chico" = "#D9A566",
+            "Zona Central" = azul, "Zona Sur" = "#7C93B5",
+            "Zona Austral" = pizarra)) +
+  guides(
+    fill  = guide_legend(nrow = 2, title = NULL),
+    color = guide_legend(nrow = 2, title = NULL)
+  ) +
+  theme(
+    legend.title = element_blank(),
+    legend.text  = element_text(size = 15, face = "bold", color = tinta),
+    legend.key.size = unit(0.9, "lines"),
+    legend.margin = margin(t = 2)
+  )
+```
+
+<p class="nota-fuente">Medias de las variables estandarizadas por macrozona.<br>El radio crece con el valor de la variable.</p>
+:::
+::: {.column width="46%"}
+::: {.fragment .fade-up}
+El **Norte Grande** se estira hacia dos vértices casi opuestos población extranjera y hacinamiento crítico, y queda en el promedio en todo lo demás. No es «más carenciada»: es carenciada **de otra manera**.
+:::
+::: {.fragment .fade-up}
+::: {.panel-invertido}
+Si un solo número bastara para ordenarlas, los polígonos serían versiones agrandadas unos de otros. **Y no lo son.**
+:::
+:::
+:::
+::::
+
+
+## Distancias, casos atípicos y normalidad {.smaller}
+
+<span class="tag tag-inf">Distancia de Mahalanobis y normalidad multivariante</span>
+
+```{r mahalanobis}
+#| cache: true
+d2 <- mahalanobis(X, colMeans(X), S)
+u95 <- qchisq(0.95, p); u999 <- qchisq(0.999, p)
+n95 <- sum(d2 > u95); n999 <- sum(d2 > u999)
+
+# Test de Mardia (el término de asimetría se acumula por bloques por el tamaño de n)
+Zc <- as.matrix(scale(X, scale = FALSE)); Sinv <- solve(S); b1 <- 0
+for (i in seq(1, n, by = 500)) {
+  idx <- i:min(i + 499, n)
+  b1 <- b1 + sum((Zc[idx, , drop = FALSE] %*% Sinv %*% t(Zc))^3)
+}
+b1p <- b1 / n^2; b2p <- mean(d2^2)
+est_sk <- n * b1p / 6; gl_sk <- p * (p + 1) * (p + 2) / 6
+p_sk <- pchisq(est_sk, gl_sk, lower.tail = FALSE)
+```
+
+:::: {.columns}
+::: {.column width="50%"}
+```{r qqplot}
+#| fig.width: 5.6
+#| fig.height: 3.9
+tibble(teo = qchisq(ppoints(n), df = p), obs = sort(d2)) |>
+  ggplot(aes(teo, obs)) +
+  geom_abline(slope = 1, intercept = 0, color = cobre, linewidth = 0.9) +
+  geom_point(color = azul, alpha = 0.35, size = 1) +
+  coord_cartesian(ylim = c(0, 120)) +
+  labs(x = expression("Cuantiles teóricos de una "*{chi^2}[8]),
+       y = expression("Distancia de Mahalanobis "*D^2)) +
+  tema_dep(base_size = 15)
+```
+
+<p class="nota-fuente">Si los datos fueran normales, los puntos caerían **sobre la recta**. La cola se despega: hay muchas más zonas extremas de las que la normal admite.</p>
+:::
+::: {.column width="48%"}
+<div class="stat-row holgada">
+  <div class="stat-box"><span class="v">`r round(100*n95/n,1)` %</span><span class="k">de las zonas se sale de lo que la normal permite;<br>debería ser 5 %</span></div>
+  <div class="stat-box acento"><span class="v">`r n999`</span><span class="k">zonas rarísimas: la normal admitiría 5</span></div>
+</div>
+
+::: {.fragment .fade-up}
+::: {.contraste .grande}
+<span class="h">H₀</span> los datos siguen una **normal multivariante**
+
+<span class="h">H₁</span> no la siguen
+
+**Test de Mardia:**
+<br><span class="est">Vía curtosis ($b_{2,p}$):</span> `r round(b2p,1)` (esperado 80)
+<br><span class="est">Vía asimetría ($\chi^2_{120}$):</span> `r format(round(est_sk), big.mark=".", decimal.mark=",")`, <span class="p">$p$ `r fmt_p(p_sk)`</span>
+
+<span class="fallo">Se rechaza H₀ por las dos vías.</span>
+:::
+:::
+
+::: {.fragment .fade-up}
+::: {.card .amplia .cobre}
+<span class="concepto">Y aun así, no eliminamos ningún atípico</span>
+Las zonas extremas **son** el fenómeno que estudiamos.
+:::
+:::
+:::
+::::
+
+
+## <span class="section-kicker">05 · Componentes principales</span>¿Cuántas dimensiones hacen falta? {.smaller}
+
+```{r acp}
+kmo  <- psych::KMO(R)
+bart <- psych::cortest.bartlett(R, n = n)
+
+acp <- prcomp(X, scale. = TRUE)
+lambda <- acp$sdev^2
+# El signo que entrega prcomp es arbitrario: se orienta cada eje sustantivamente
+flip <- function(o, k, v, sg) {
+  if (sign(o$rotation[v, k]) != sg) { o$rotation[, k] <- -o$rotation[, k]; o$x[, k] <- -o$x[, k] }
+  o
+}
+acp <- flip(acp, 1, "escolaridad", -1)
+acp <- flip(acp, 2, "porc_pob_ext", 1)
+acp <- flip(acp, 3, "porc_pob_may_vive_sola", 1)
+
+tab_ev <- tibble(Componente = paste0("CP", 1:p),
+                 `Valor propio` = lambda,
+                 `% varianza`   = 100 * lambda / p,
+                 `% acumulado`  = cumsum(100 * lambda / p))
+```
+
+:::: {.columns}
+::: {.column width="50%"}
+```{r scree}
+#| fig.width: 5.8
+#| fig.height: 3.4
+tab_ev |> mutate(k = 1:p) |>
+  ggplot(aes(k, `Valor propio`)) +
+  geom_hline(yintercept = 1, color = cobre, linetype = "22", linewidth = 0.75) +
+  annotate("text", x = 8, y = 1.14, hjust = 1, label = "Criterio de Kaiser · λ = 1",
+           family = "Montserrat", fontface = "bold", size = 4.3, color = cobre_osc) +
+  geom_line(color = azul, linewidth = 1) +
+  geom_point(color = azul, size = 3) +
+  geom_point(data = ~ dplyr::filter(.x, k <= 3), color = azul, size = 5) +
+  # El codo: a partir de la cuarta componente la curva se aplana
+  annotate("segment", x = 4, xend = 4, y = 2.35, yend = 1.16,
+           color = cobre_osc, linewidth = 0.5,
+           arrow = arrow(length = unit(0.16, "cm"))) +
+  annotate("text", x = 4, y = 2.55, label = "El codo",
+           family = "Montserrat", fontface = "bold", size = 4.6, color = cobre_osc) +
+  scale_x_continuous(breaks = 1:p) +
+  labs(x = "Componente", y = "Valor propio") +
+  tema_dep(base_size = 15)
+```
+
+:::
+::: {.column width="48%"}
+```{r tabla-ev}
+tab_ev |> slice(1:5) |>
+  tabla_dep(size = 17, padding = 5) |>
+  fmt_number(columns = -Componente, decimals = 3) |>
+  cols_align(align = "center", columns = -Componente) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Componente)) |>
+  tab_style(style = cell_fill(color = azul_tint), locations = cells_body(rows = 1:3))
+```
+
+::: {.fragment .fade-up}
+::: {.card .amplia .cobre}
+<span class="concepto">Tres criterios, tres componentes</span>
+Kaiser ($\lambda_3=$ `r round(lambda[3],2)`), el codo en la cuarta y el **`r round(tab_ev[["% acumulado"]][3],1)` %** de varianza: los tres coinciden.
+:::
+:::
+:::
+::::
+
+::: {.fragment .fade-up}
+::: {.contraste .grande .centrada}
+<span class="h">H₀</span> $\mathbf{R}=\mathbf{I}$ · las variables son incorrelacionadas: **no hay nada que reducir**
+
+<span class="h">H₁</span> $\mathbf{R}\neq\mathbf{I}$ · **hay estructura de correlación** que un ACP puede resumir
+
+<span class="est">Esfericidad de Bartlett:</span> $\chi^2_{`r bart$df`}=$ `r format(round(bart$chisq), big.mark=".", decimal.mark=",")`, <span class="p">$p$ `r fmt_p(bart$p.value)`</span> &nbsp;·&nbsp; <span class="est">KMO $=$ `r round(kmo$MSA, 3)`</span> (admisible, $>0{,}5$)
+
+<span class="fallo">Se rechaza H₀: reducir la dimensión está justificado.</span>
+:::
+:::
+
+
+## Los tres ejes y su interpretación {.smaller .densa}
+
+<span class="tag tag-acp">ACP · Correlaciones variable–componente y biplot</span>
+
+```{r cargas}
+corr_vc <- sweep(acp$rotation[, 1:3], 2, acp$sdev[1:3], "*")
+```
+
+:::: {.columns}
+::: {.column width="42%"}
+```{r tabla-cargas}
+tibble(Variable = unname(etiquetas[V8])) |>
+  bind_cols(as_tibble(round(corr_vc, 3), .name_repair = ~ c("CP1", "CP2", "CP3"))) |>
+  tabla_dep(size = 16, padding = 3) |>
+  fmt_number(columns = -Variable, decimals = 3) |>
+  cols_align(align = "center", columns = -Variable) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Variable)) |>
+  data_color(columns = c(CP1, CP2, CP3), palette = c(cobre, arena, azul),
+             domain = c(-1, 1))
+```
+
+::: {.card .fragment .fade-up}
+<span class="concepto">CP1 · Deprivación socioeconómica — `r round(100*lambda[1]/p,1)` %</span>
+Hacinamiento y desocupación frente a escolaridad.
+:::
+::: {.card .fragment .fade-up .cobre}
+<span class="concepto">CP2 · Hacinamiento crítico migrante — `r round(100*lambda[2]/p,1)` %</span>
+Extranjeros y hacinamiento crítico, **con escolaridad positiva**.
+:::
+::: {.card .fragment .fade-up}
+<span class="concepto">CP3 · Envejecimiento residencial — `r round(100*lambda[3]/p,1)` %</span>
+Casi puro: población mayor que vive sola.
+:::
+:::
+::: {.column width="56%"}
+```{r biplot}
+#| fig.width: 7.2
+#| fig.height: 5.6
+fl <- as_tibble(corr_vc[, 1:2], rownames = "var") |>
+  mutate(lab = etiquetas[var], dest = "otra",
+         # Cada rótulo se separa de la punta de su flecha en la MISMA
+         # dirección de la flecha, así quedan en corona alrededor del origen
+         # y no encima de la nube. ggrepel sólo afina desde ahí.
+         .norma = sqrt(PC1^2 + PC2^2),
+         .sep = dplyr::case_when(var == "escolaridad" ~ 2.5,
+                                 var == "porc_hacinamiento_critico" ~ 2.1,
+                                 TRUE ~ 1.8),
+         nx = PC1 / .norma * .sep,
+         ny = PC2 / .norma * .sep,
+         # «Mayores solos» tiene la flecha más corta y apunta al centro de la
+         # nube: su rótulo se manda al hueco de abajo a la izquierda.
+         nx = dplyr::if_else(var == "porc_pob_may_vive_sola", -3.1, nx),
+         ny = dplyr::if_else(var == "porc_pob_may_vive_sola", -2.1, ny))
+
+# Las dos flechas del argumento: si el ángulo entre ellas es recto, los dos
+# fenómenos son incorrelacionados y no pueden ordenarse en un mismo eje.
+v_ext <- as.numeric(corr_vc["porc_pob_ext", 1:2])
+v_hac <- as.numeric(corr_vc["porc_hacinamiento_medio", 1:2])
+ang_vh <- 180 / pi * acos(sum(v_ext * v_hac) /
+                          sqrt(sum(v_ext^2) * sum(v_hac^2)))
+fl$dest[fl$var %in% c("porc_pob_ext", "porc_hacinamiento_medio")] <- "clave"
+
+
+as_tibble(acp$x[, 1:2]) |>
+  mutate(macro = bd$macrozona) |>
+  ggplot(aes(PC1, PC2)) +
+  geom_hline(yintercept = 0, color = linea, linewidth = 0.4) +
+  geom_vline(xintercept = 0, color = linea, linewidth = 0.4) +
+  geom_point(aes(color = macro), alpha = 0.26, size = 0.8) +
+  annotate("label", x = -5.6, y = 12.6, hjust = 0, label.size = 0,
+           fill = arena, family = "Montserrat", fontface = "bold",
+           size = 4.5, color = cobre_osc, lineheight = 1.02,
+           label = sprintf("Extranjera y hacinamiento medio\nforman %.0f°: casi perpendiculares,\nes decir, incorrelacionadas.", ang_vh)) +
+  geom_segment(data = fl, inherit.aes = FALSE,
+               aes(0, 0, xend = PC1 * 3.6, yend = PC2 * 3.6,
+                   color = dest, linewidth = dest),
+               arrow = arrow(length = unit(0.2, "cm"))) +
+  geom_text_repel(data = fl, inherit.aes = FALSE,
+                  aes(PC1 * 3.6, PC2 * 3.6, label = lab, color = dest),
+                  nudge_x = fl$nx, nudge_y = fl$ny,
+                  family = "Montserrat", fontface = "bold",
+                  size = 4.2, seed = 1, box.padding = 0.3, point.padding = 0.1,
+                  force = 0.4, force_pull = 2.5, max.overlaps = Inf,
+                  min.segment.length = 0.6, segment.color = pizarra,
+                  segment.linewidth = 0.35, show.legend = FALSE) +
+  scale_linewidth_manual(values = c(clave = 1.25, otra = 0.6), guide = "none") +
+  scale_color_manual(values = c("Norte Grande" = cobre, "Norte Chico" = "#D9A566",
+                                "Zona Central" = azul, "Zona Sur" = "#7C93B5",
+                                "Zona Austral" = pizarra,
+                                clave = cobre_osc, otra = azul_prof),
+                     breaks = orden_macro) +
+  guides(color = guide_legend(override.aes = list(alpha = 1, size = 3,
+                                                  linetype = 0), nrow = 2)) +
+  labs(x = paste0("CP1 · Deprivación (", coma(100*lambda[1]/p), " %)"),
+       # En dos líneas: en una sola el título rotado no cabe en el alto del
+       # panel y el paréntesis final queda cortado.
+       y = paste0("CP2 · Hacin. crítico migrante\n(", coma(100*lambda[2]/p),
+                  " %)")) +
+  tema_dep(base_size = 15) +
+  theme(axis.title.y = element_text(lineheight = 0.95))
+```
+:::
+::::
+
+
+## ¿Qué ve y qué no ve el índice oficial? {.smaller}
+
+<span class="tag tag-acp">ACP · Validación externa</span>
+
+```{r validacion}
+r_cp <- sapply(1:3, function(k) cor(acp$x[, k], bd$indice_deprivacion2_norm))
+```
+
+:::: {.columns}
+::: {.column width="46%"}
+```{r datos-comp}
+#| results: asis
+# Los puntajes de las tres componentes y el índice viajan a JavaScript para
+# poder conmutar entre CP1, CP2 y CP3 sin volver a dibujar en R.
+ind_v <- bd$indice_deprivacion2_norm
+et_cp <- c("CP1 &middot; Deprivaci&oacute;n",
+           "CP2 &middot; Hacin. cr&iacute;tico migrante",
+           "CP3 &middot; Envejecimiento residencial")
+uno <- function(k) {
+  aj <- stats::lm(ind_v ~ acp$x[, k])
+  sprintf('{p:[%s],r:%s,a:%s,b:%s,min:%s,max:%s,et:"%s",pct:%s}',
+          paste(round(acp$x[, k], 2), collapse = ","),
+          round(r_cp[k], 3), round(unname(coef(aj)[1]), 4),
+          round(unname(coef(aj)[2]), 4),
+          round(min(acp$x[, k]), 2), round(max(acp$x[, k]), 2),
+          et_cp[k], round(100 * lambda[k] / p, 1))
+}
+cat(sprintf('<script>window.CMP={ind:[%s],c:[%s,%s,%s]};</script>',
+            paste(round(ind_v, 3), collapse = ","), uno(1), uno(2), uno(3)))
+```
+
+```{=html}
+<div class="conmuta">
+<button id="cb-1" class="activo" onclick="componente(1)">CP1</button>
+<button id="cb-2" onclick="componente(2)">CP2</button>
+<button id="cb-3" onclick="componente(3)">CP3</button>
+<span class="conmuta-pie" id="cb-pie"></span>
+</div>
+<div id="comp-lienzo"></div>
+```
+
+```{=html}
+<script>
+(function () {
+var W = 620, HH = 556, ML = 76, MR = 16, MT = 20, MB = 58;
+
+function ejeX(v, cf) { return ML + (v - cf.min) / (cf.max - cf.min) * (W - ML - MR); }
+function ejeY(v)     { return HH - MB - v * (HH - MB - MT); }
+function fmt(x, d)   { return x.toFixed(d).replace(".", ",").replace("-", "\u2212"); }
+
+function dibujar(k) {
+  var cf = window.CMP.c[k - 1], P = cf.p, IND = window.CMP.ind, n = P.length;
+  var s = '<svg viewBox="0 0 ' + W + ' ' + HH + '" width="100%" role="img" ' +
+          'aria-label="Índice provisto frente a la componente ' + k + '">';
+  // rejilla y eje vertical
+  var t;
+  for (t = 0; t <= 1.0001; t += 0.25) {
+    var y = ejeY(t);
+    s += '<line x1="' + ML + '" y1="' + y + '" x2="' + (W - MR) + '" y2="' + y +
+         '" stroke="#DCD5C5" stroke-width="1"/>';
+    s += '<text x="' + (ML - 9) + '" y="' + (y + 6) + '" text-anchor="end" ' +
+         'font-size="17" font-weight="600" fill="#3B4657">' + fmt(t, 2) + '</text>';
+  }
+  // marcas del eje horizontal
+  var paso = Math.ceil((cf.max - cf.min) / 6), x0 = Math.ceil(cf.min / paso) * paso;
+  for (var v = x0; v <= cf.max; v += paso) {
+    var x = ejeX(v, cf);
+    s += '<text x="' + x + '" y="' + (HH - MB + 24) + '" text-anchor="middle" ' +
+         'font-size="17" font-weight="600" fill="#3B4657">' + v + '</text>';
+  }
+  // nube de puntos, en un solo path para que redibujar sea instantáneo
+  var d = "";
+  for (var i = 0; i < n; i++) {
+    var px = ejeX(P[i], cf), py = ejeY(IND[i]);
+    d += "M" + px.toFixed(1) + " " + py.toFixed(1) + "h2.2v2.2h-2.2z";
+  }
+  s += '<path d="' + d + '" fill="#1C3D6E" fill-opacity="0.30"/>';
+  // Recta de regresión, recortada al rango visible del índice (0 a 1): sin
+  // recortar se sale del panel por abajo en la CP2.
+  var xa = cf.min, xb = cf.max;
+  if (Math.abs(cf.b) > 1e-9) {
+    var lim = [(0 - cf.a) / cf.b, (1 - cf.a) / cf.b].sort(function (u, v) { return u - v; });
+    xa = Math.max(xa, lim[0]); xb = Math.min(xb, lim[1]);
+  }
+  s += '<line x1="' + ejeX(xa, cf) + '" y1="' + ejeY(cf.a + cf.b * xa) + '" x2="' +
+       ejeX(xb, cf) + '" y2="' + ejeY(cf.a + cf.b * xb) +
+       '" stroke="#B4652A" stroke-width="3"/>';
+  // rótulo de la correlación
+  s += '<text x="' + (ML + 14) + '" y="' + (MT + 26) + '" font-size="26" ' +
+       'font-weight="800" fill="#8C4A18">r = ' + fmt(cf.r, 3) + '</text>';
+  // títulos de los ejes
+  s += '<text x="' + ((ML + W - MR) / 2) + '" y="' + (HH - 10) +
+       '" text-anchor="middle" font-size="19" font-weight="700" fill="#1B2330">' +
+       cf.et + ' (' + fmt(cf.pct, 1) + ' %)</text>';
+  s += '<text transform="rotate(-90 20 ' + ((HH - MB + MT) / 2) + ')" x="20" y="' +
+       ((HH - MB + MT) / 2) + '" text-anchor="middle" font-size="19" ' +
+       'font-weight="700" fill="#1B2330">Índice provisto (0–1)</text>';
+  return s + '</svg>';
+}
+
+var PIE = ["Mide lo mismo que el índice: es la carencia clásica",
+           "Ajena al índice: es la dimensión que la escala no recoge",
+           "Tampoco la recoge, y además es casi una sola variable"];
+
+window.componente = function (k) {
+  var caja = document.getElementById("comp-lienzo");
+  if (!caja || !window.CMP) return;
+  caja.innerHTML = dibujar(k);
+  for (var j = 1; j <= 3; j++) {
+    var b = document.getElementById("cb-" + j);
+    if (b) b.className = (j === k) ? "activo" : "";
+  }
+  var pie = document.getElementById("cb-pie");
+  if (pie) pie.textContent = PIE[k - 1];
+};
+
+var intentos = 0;
+(function esperar() {
+  if (document.getElementById("comp-lienzo") && window.CMP) {
+    window.componente(1);
+  } else if (++intentos < 40) {
+    setTimeout(esperar, 250);
+  }
+})();
+})();
+</script>
+```
+:::
+::: {.column width="52%"}
+<div class="stat-row">
+  <div class="stat-box"><span class="v">`r round(r_cp[1], 3)`</span><span class="k">correlación CP1 – índice</span></div>
+  <div class="stat-box acento"><span class="v">`r round(r_cp[2], 3)`</span><span class="k">correlación CP2 – índice</span></div>
+  <div class="stat-box"><span class="v">`r round(r_cp[3], 3)`</span><span class="k">correlación CP3 – índice</span></div>
+</div>
+
+::: {.fragment .fade-up}
+**Coincide en lo que mide.** La CP1 correlaciona `r round(r_cp[1],3)` con el índice, sin haberlo usado. Mide bien la carencia clásica.
+:::
+
+::: {.fragment .fade-up}
+**No ve la segunda dimensión.** La CP2 vale el `r round(100*lambda[2]/p,1)` % de la varianza y es ajena al índice ($r =$ `r round(r_cp[2],3)`).
+:::
+
+::: {.fragment .fade-up}
+**Tampoco ve la tercera.** La CP3 (envejecimiento residencial) es igualmente ignorada por el índice ($r =$ `r round(r_cp[3],3)`), confirmando que esta dimensión corre por un carril totalmente distinto.
+:::
+
+::: {.fragment .fade-up}
+::: {.panel-invertido}
+**Una escala no puede contener varios fenómenos independientes entre sí.**
+:::
+:::
+:::
+::::
+
+
+## <span class="section-kicker">06 · Análisis factorial</span>Separar lo común de lo específico {.smaller .densa}
+
+```{r factorial}
+af <- psych::fa(X, nfactors = 3, rotate = "varimax", fm = "pa")
+L <- unclass(af$loadings)
+if (L["porc_hacinamiento_medio", 1] < 0) L[, 1] <- -L[, 1]
+if (L["porc_pob_ext", 2] < 0)            L[, 2] <- -L[, 2]
+if (L["porc_pob_may_vive_sola", 3] < 0)  L[, 3] <- -L[, 3]
+ss <- colSums(L^2)
+```
+
+:::: {.columns}
+::: {.column width="55%"}
+```{r tabla-af}
+tibble(Variable = unname(etiquetas[V8])) |>
+  bind_cols(as_tibble(round(L, 3), .name_repair = ~ c("F1", "F2", "F3"))) |>
+  mutate(Comunalidad = round(af$communality, 3),
+         `Var. específica` = round(af$uniquenesses, 3)) |>
+  tabla_dep(size = 18, padding = 6) |>
+  fmt_number(columns = -Variable, decimals = 3) |>
+  cols_align(align = "center", columns = -Variable) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Variable)) |>
+  data_color(columns = c(F1, F2, F3), palette = c(cobre, arena, azul),
+             domain = c(-0.9, 0.9))
+```
+
+::: {.card .amplia .cobre}
+<span class="concepto">Factor principal, no máxima verosimilitud</span>
+ML supone normalidad multivariante y Mardia la rechazó.<br>El factor principal es descriptivo y no la exige.
+:::
+
+::: {.fragment .fade-up}
+::: {.panel-invertido}
+**El hacinamiento crítico es un fenómeno demográfico distinto e independiente, no un grado más de deprivación.**
+:::
+:::
+:::
+::: {.column width="43%"}
+```{r var-factores}
+tibble(Factor = c("F1 · Deprivación socioeconómica",
+                  "F2 · Hacinamiento crítico migrante",
+                  "F3 · Envejecimiento residencial"),
+       `% varianza`  = 100 * as.numeric(ss) / p,
+       `% acumulado` = cumsum(100 * as.numeric(ss) / p)) |>
+  tabla_dep(size = 18, padding = 9) |>
+  fmt_number(columns = -Factor, decimals = 2) |>
+  cols_align(align = "center", columns = -Factor) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Factor))
+```
+
+::: {.fragment .fade-up}
+::: {.card .amplia}
+<span class="concepto">Dos técnicas, la misma estructura</span>
+El factorial **reproduce** los tres ejes del ACP con cargas más nítidas. Criterios distintos, mismo resultado:<br>la estructura es del fenómeno, no del método.
+:::
+:::
+
+::: {.fragment .fade-up}
+::: {.card .amplia .cobre}
+<span class="concepto">Varimax separa lo que el ACP mezclaba</span>
+El hacinamiento **crítico** (F2) queda aparte del medio y alto (F1). La sobreocupación extrema no es «más» del mismo problema: es **otro**.
+:::
+:::
+:::
+::::
+
+
+## <span class="section-kicker">07 · Inferencia multivariada</span>¿Difieren los territorios? {.smaller}
+
+```{r inferencia}
+Y <- as.matrix(X)
+man <- manova(Y ~ bd$macrozona)
+sw  <- summary(man, test = "Wilks")
+sp  <- summary(man, test = "Pillai")   # segundo estadístico, misma conclusión
+
+g1 <- Y[bd$codigo_region == 13, ]; g2 <- Y[bd$codigo_region != 13, ]
+n1 <- nrow(g1); n2 <- nrow(g2)
+Sp  <- ((n1 - 1) * cov(g1) + (n2 - 1) * cov(g2)) / (n1 + n2 - 2)
+dif <- colMeans(g1) - colMeans(g2)
+T2  <- (n1 * n2 / (n1 + n2)) * as.numeric(t(dif) %*% solve(Sp) %*% dif)
+F_h <- (n1 + n2 - p - 1) / (p * (n1 + n2 - 2)) * T2
+p_h <- pf(F_h, p, n1 + n2 - p - 1, lower.tail = FALSE)
+```
+
+:::: {.columns}
+::: {.column width="50%"}
+<span class="tag tag-inf">$T^2$ de Hotelling · Metropolitana frente al resto</span>
+
+::: {.contraste .grande}
+<span class="h">H₀</span> $\boldsymbol{\mu}_{\text{RM}}=\boldsymbol{\mu}_{\text{resto}}$
+
+<span class="h">H₁</span> $\boldsymbol{\mu}_{\text{RM}}\neq\boldsymbol{\mu}_{\text{resto}}$
+
+<span class="est">$T^2=$ `r format(round(T2), big.mark=".", decimal.mark=",")`</span> → $F_{`r p`,\,`r format(n1+n2-p-1, big.mark=".", decimal.mark=",")`}=$ `r round(F_h, 1)`, <span class="p">$p$ `r fmt_p(p_h)`</span>
+
+<span class="fallo">Se rechaza H₀ · $n_1=$ `r format(n1, big.mark=".", decimal.mark=",")` zonas de la RM</span>
+:::
+
+<span class="tag tag-desc">Las cinco variables donde más difiere la RM</span>
+
+```{r tabla-dif}
+tibble(Variable = unname(etiquetas[V8]),
+       `RM` = colMeans(g1), `Resto` = colMeans(g2),
+       `Diferencia` = as.numeric(dif)) |>
+  arrange(desc(abs(Diferencia))) |>
+  slice(1:5) |>
+  tabla_dep(size = 20, padding = 8) |>
+  fmt_number(columns = -Variable, decimals = 2) |>
+  cols_align(align = "center", columns = -Variable) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Variable))
+```
+:::
+::: {.column width="48%"}
+<span class="tag tag-inf">MANOVA · las cinco macrozonas</span>
+
+::: {.contraste .grande}
+<span class="h">H₀</span> $\boldsymbol{\mu}_1=\boldsymbol{\mu}_2=\dots=\boldsymbol{\mu}_5$
+
+<span class="h">H₁</span> al menos un vector de medias difiere
+
+<span class="est">$\Lambda=|\mathbf{W}|/|\mathbf{W}+\mathbf{B}|=$ `r round(sw$stats[1,"Wilks"], 3)`</span> → $F_{`r sw$stats[1,"num Df"]`,\,`r format(round(sw$stats[1,"den Df"]), big.mark=".", decimal.mark=",")`}=$ `r round(sw$stats[1,"approx F"], 1)`, <span class="p">$p$ `r fmt_p(sw$stats[1,"Pr(>F)"])`</span>
+
+<span class="fallo">Se rechaza H₀ <br>La traza de Pillai ($`r round(sp$stats[1,"Pillai"], 3)`$) concluye lo mismo</span>
+:::
+
+::: {.fragment .fade-up}
+<div class="stat-row holgada">
+  <div class="stat-box acento"><span class="v">+`r round(dif[["porc_pob_ext"]],1)`</span><span class="k">puntos de extranjeros: la mayor diferencia de la RM</span></div>
+  <div class="stat-box"><span class="v">`r round(100*(1-sw$stats[1,"Wilks"]^(1/sqrt((p^2*16-4)/(p^2+16-5)))),1)` %</span><span class="k">es el tamaño del efecto multivariante ($\eta^2_p$)</span></div>
+</div>
+:::
+
+::: {.fragment .fade-up}
+::: {.card .amplia .cobre}
+<span class="concepto">Significancia estadística vs. Relevancia</span>
+Un $\Lambda = `r round(sw$stats[1,"Wilks"], 3)`$ revela que el **`r round(100*sw$stats[1,"Wilks"], 1)` %** de las diferencias entre zonas ocurre **independiente de la macrozona**. Con $n = `r format(n, big.mark=".", decimal.mark=",")`$, el test siempre dará "significativo". Lo crucial es notar que el tamaño del efecto ($\eta^2_p$) es muy bajo.
+:::
+:::
+:::
+::::
+
+
+## Significación no es relevancia: dónde está la variabilidad {.smaller .densa}
+
+<span class="tag tag-inf">Elipsoides bivariados · Descomposición de la varianza</span>
+
+```{r elipses}
+vx <- "escolaridad"; vy <- "porc_hacinamiento_medio"
+elipse <- function(mu, Sg, radio, m = 200) {
+  ei <- eigen(Sg); t <- seq(0, 2 * pi, length.out = m)
+  pts <- t(mu + radio * (ei$vectors %*% diag(sqrt(pmax(ei$values, 0))) %*%
+                           rbind(cos(t), sin(t))))
+  tibble(x = pts[, 1], y = pts[, 2])
+}
+elipses <- map_dfr(orden_macro, function(gg) {
+  Xi <- as.matrix(bd[bd$macrozona == gg, c(vx, vy)])
+  ni <- nrow(Xi); mu <- colMeans(Xi); Si <- cov(Xi)
+  r_conf <- sqrt(2 * (ni - 1) / (ni * (ni - 2)) * qf(0.95, 2, ni - 2))
+  bind_rows(
+    elipse(mu, Si, r_conf) |> mutate(tipo = "Confianza para la media"),
+    elipse(mu, Si, sqrt(qchisq(0.95, 2))) |> mutate(tipo = "Tolerancia de las zonas")
+  ) |> mutate(macro = gg)
+}) |> mutate(macro = factor(macro, levels = orden_macro))
+
+cp1 <- acp$x[, 1]
+descomp <- function(y, g) {
+  ybar <- mean(y); tot <- mean((y - ybar)^2); gr <- split(y, g)
+  intra <- sum(sapply(gr, function(v) mean((v - mean(v))^2) * length(v))) / length(y)
+  c(intra = 100 * intra / tot, inter = 100 * (1 - intra / tot))
+}
+dv <- rbind(Región    = descomp(cp1, bd$codigo_region),
+            Provincia = descomp(cp1, bd$codigo_provincia),
+            Comuna    = descomp(cp1, bd$codigo_comuna))
+tab_dv <- tibble(Partición = rownames(dv), intra = dv[, "intra"], inter = dv[, "inter"])
+```
+
+:::: {.columns}
+::: {.column width="52%"}
+```{r plot-elipses}
+#| fig.width: 6.4
+#| fig.height: 4.0
+ggplot(elipses, aes(x, y, color = macro)) +
+  geom_path(aes(group = interaction(macro, tipo), linewidth = tipo)) +
+  facet_wrap(~tipo, nrow = 1, scales = "free") +
+  scale_linewidth_manual(values = c(1.5, 0.65), guide = "none") +
+  scale_color_manual(values = c("Norte Grande" = cobre, "Norte Chico" = "#D9A566",
+                                "Zona Central" = azul, "Zona Sur" = "#7C93B5",
+                                "Zona Austral" = pizarra)) +
+  guides(color = guide_legend(nrow = 2, override.aes = list(linewidth = 1.4))) +
+  labs(x = "Escolaridad (años)", y = "Hacin. medio (%)") +
+  tema_dep(base_size = 14)
+```
+
+::: {.card .amplia}
+<span class="concepto">Dos elipsoides al 95 %, y ojo con la escala</span>
+Las regiones de **confianza para la media** son unas cuarenta veces más pequeñas y **no se solapan**: es lo que detectan $T^2$ y el MANOVA. Las de **tolerancia**, que contienen el 95 % de las zonas, se superponen casi por completo.
+:::
+:::
+::: {.column width="46%"}
+```{r plot-descomp-func}
+plot_descomp <- function(k) {
+  cpk <- acp$x[, k]
+  dvk <- rbind(Región = descomp(cpk, bd$codigo_region),
+               Provincia = descomp(cpk, bd$codigo_provincia),
+               Comuna = descomp(cpk, bd$codigo_comuna))
+  tabk <- tibble(Partición = rownames(dvk), intra = dvk[, "intra"], inter = dvk[, "inter"])
+  
+  bar <- tabk |>
+    mutate(Partición = factor(Partición, levels = c("Comuna", "Provincia", "Región")),
+           i = as.integer(Partición))
+  seg_var <- bind_rows(
+    bar |> transmute(i, parte = "Dentro de la unidad", x0 = 0,     x1 = intra,
+                     etq = sprintf("%.1f %%", intra)),
+    bar |> transmute(i, parte = "Entre unidades",      x0 = intra, x1 = 100,
+                     etq = sprintf("%.1f %%", inter)))
+
+  ggplot(seg_var) +
+    geom_rect(aes(xmin = x0, xmax = x1, ymin = i - 0.32, ymax = i + 0.32, fill = parte),
+              color = arena, linewidth = 0.7) +
+    geom_text(data = ~ dplyr::filter(.x, parte == "Dentro de la unidad"),
+              aes(x = x1 / 2, y = i, label = etq),
+              family = "Montserrat", fontface = "bold", color = "white", size = 4.6) +
+    geom_text(data = ~ dplyr::filter(.x, parte == "Entre unidades"),
+              aes(x = 101.5, y = i, label = etq), hjust = 0,
+              family = "Montserrat", fontface = "bold", color = cobre_osc, size = 4.6) +
+    scale_y_continuous(breaks = 1:3, labels = levels(bar$Partición),
+                       expand = expansion(add = 0.35)) +
+    scale_x_continuous(breaks = seq(0, 100, 25), expand = expansion(mult = c(0, 0.19))) +
+    scale_fill_manual(values = c("Dentro de la unidad" = azul, "Entre unidades" = cobre)) +
+    coord_cartesian(clip = "off") +
+    labs(x = paste0("% de la varianza de CP", k), y = NULL) +
+    tema_dep(base_size = 14) +
+    theme(axis.text.y = element_text(face = "bold", color = tinta),
+          panel.grid.major.y = element_blank(),
+          panel.grid.major.x = element_line(color = linea, linewidth = 0.35),
+          axis.line.x = element_blank(),
+          plot.margin = margin(6, 40, 6, 6))
+}
+```
+
+::: {.panel-tabset}
+### CP1
+```{r plot-descomp-1}
+#| fig.width: 5.6
+#| fig.height: 2.9
+plot_descomp(1)
+```
+### CP2
+```{r plot-descomp-2}
+#| fig.width: 5.6
+#| fig.height: 2.9
+plot_descomp(2)
+```
+### CP3
+```{r plot-descomp-3}
+#| fig.width: 5.6
+#| fig.height: 2.9
+plot_descomp(3)
+```
+:::
+
+::: {.fragment .fade-up}
+::: {.panel-invertido}
+**Las medias difieren; las zonas no.** Incluso dentro de la **comuna** queda el **`r round(tab_dv$intra[3],1)` %** de la variabilidad (CP1). La escala del fenómeno es **submunicipal**.
+:::
+:::
+:::
+::::
+
+
+## <span class="section-kicker">08 · Clustering</span>Construir la tipología {.smaller}
+
+```{r clustering}
+# La Clase 7 recomienda estandarizar cuando las escalas no coinciden.
+D  <- dist(Z, method = "euclidean")
+
+# Los cuatro enlaces que se comparan en el dendrograma de la lámina. En clases
+# se escribe hclust(..., "ward"); R lo traduce a "ward.D" con un aviso, y
+# "ward.D" sobre distancias sin elevar al cuadrado no implementa el criterio de
+# Ward (Murtagh & Legendre, 2014). Se usa "ward.D2", que sí lo implementa.
+metodos <- c(single = "Vecino más cercano", complete = "Vecino más lejano",
+             average = "Promedio", centroid = "Centroide", ward.D2 = "Ward")
+arboles <- lapply(names(metodos), function(mt) hclust(if(mt == "centroid") D^2 else D, method = mt))
+names(arboles) <- names(metodos)
+
+hc <- arboles[["ward.D2"]]
+h  <- hc$height
+
+# Criterio de Mojena, tal como está en el código de clase: dos puntos de corte.
+mojena <- function(hh) {
+  ric <- as.numeric(quantile(hh, .75) - quantile(hh, .25))
+  c(pc1 = mean(hh) + 2.25 * sd(hh), pc2 = median(hh) + 2.25 * ric / 2)
+}
+moj <- mojena(h); moj1 <- moj[["pc1"]]; moj2 <- moj[["pc2"]]
+k_moj1 <- sum(h > moj1) + 1
+k_moj2 <- sum(h > moj2) + 1
+
+# Altura a la que se corta para quedarse con 4 grupos: entre la fusión que deja
+# 4 y la que deja 3.
+corte4 <- mean(c(h[n - 4], h[n - 3]))
+tam4   <- sort(as.integer(table(cutree(hc, 4))), decreasing = TRUE)
+```
+
+```{r indices-k}
+# ---------------------------------------------------------------------------
+#  Validación interna sobre las 4.843 zonas (sin submuestrear).
+#
+#  silueta_media() reproduce cluster::silhouette() y dunn_dist() reproduce
+#  clusterCrit::intCriteria(..., crit = "dunn"), pero vectorizados: la versión
+#  de los paquetes recorre las n observaciones en R y con n = 4.843 tarda
+#  minutos. Aquí la distancia media de cada punto a cada grupo sale de un solo
+#  producto matricial.
+#
+#  Dm pesa ~190 MB; se elimina al final del chunk.
+# ---------------------------------------------------------------------------
+Dm <- as.matrix(D)
+
+# Silueta de CADA observación (es lo que dibuja fviz_silhouette)
+silueta_obs <- function(Dm, g) {
+  g  <- as.integer(factor(g)); K <- max(g)
+  Ind <- outer(g, seq_len(K), "==") * 1
+  nk  <- colSums(Ind)
+  Sm  <- Dm %*% Ind                      # suma de distancias a cada grupo
+  own <- cbind(seq_along(g), g)
+  a   <- Sm[own] / pmax(nk[g] - 1, 1)    # cohesión (excluye la distancia a sí mismo)
+  Sm[own] <- Inf
+  b   <- apply(sweep(Sm, 2, nk, "/"), 1, min)   # separación al grupo vecino
+  ifelse(nk[g] == 1, 0, (b - a) / pmax(a, b))
+}
+silueta_media <- function(Dm, g) mean(silueta_obs(Dm, g))
+
+dunn_dist <- function(Dm, g) {
+  g <- as.integer(factor(g)); K <- max(g)
+  idx  <- split(seq_along(g), g)
+  diam <- max(vapply(idx, function(i) if (length(i) > 1) max(Dm[i, i]) else 0, 0))
+  sep  <- Inf
+  for (a in 1:(K - 1)) for (b in (a + 1):K)
+    sep <- min(sep, min(Dm[idx[[a]], idx[[b]]]))
+  sep / diam
+}
+
+ks <- 2:8
+
+# --- Alternativa particional (Clase 8): k-medias sobre las mismas Z ---
+set.seed(2026)
+km_list <- lapply(ks, function(k) kmeans(Z, centers = k, nstart = 25, iter.max = 100)$cluster)
+names(km_list) <- ks
+
+part_ward <- lapply(ks, function(k) cutree(hc, k)); names(part_ward) <- ks
+
+resumen_part <- function(g) {
+  tam <- as.integer(table(g))
+  menor <- which.min(tam)
+  c(sil = silueta_media(Dm, g), dunn = dunn_dist(Dm, g),
+    n_menor = min(tam), mayor = 100 * max(tam) / n,
+    ext_menor = mean(bd$porc_pob_ext[g == sort(unique(g))[menor]]))
+}
+
+ind_ward <- t(sapply(part_ward, resumen_part))
+ind_km   <- t(sapply(km_list,   resumen_part))
+
+# Silueta por observación, para el perfil tipo fviz_silhouette del explorador
+sil_ward <- lapply(part_ward, function(g) silueta_obs(Dm, g))
+sil_km   <- lapply(km_list,   function(g) silueta_obs(Dm, g))
+
+# Parámetros de las elipses de cada grupo en el plano CP1-CP2: centro y matriz
+# de covarianza. Es lo que dibuja fviz_cluster(..., ellipse.type = "norm").
+elipse_par <- function(g) {
+  P <- acp$x[, 1:2]
+  do.call(c, lapply(sort(unique(g)), function(cl) {
+    Q <- P[g == cl, , drop = FALSE]
+    if (nrow(Q) < 3) return(c(colMeans(Q), 0.01, 0, 0.01))
+    S2 <- cov(Q)
+    c(colMeans(Q), S2[1, 1], S2[1, 2], S2[2, 2])
+  }))
+}
+eli_ward <- lapply(part_ward, elipse_par)
+eli_km   <- lapply(km_list,   elipse_par)
+
+# --- Comparación de los CINCO métodos de enlace de la Clase 7, k = 4 ---
+#  simple = vecino más cercano · complete = vecino más lejano · average =
+#  promedio · centroid = centroide · ward.D2 = Ward.
+enlaces <- c("single", "complete", "average", "centroid", "ward.D2")
+comp_enlace <- map_dfr(enlaces, function(mt) {
+  hh <- hclust(if (mt == "centroid") D^2 else D, method = mt)
+  gg <- cutree(hh, 4)
+  tibble(Método = mt, Silueta = silueta_media(Dm, gg), Dunn = dunn_dist(Dm, gg),
+         `Grupo mayor (%)` = 100 * max(table(gg)) / n,
+         `Grupo menor` = min(table(gg)))
+})
+
+# --- Alternativa por medoides (Clase 8). Con n = 4.843, PAM es O(t k (n-k)²):
+#     CLARA existe exactamente para este caso, aplicando PAM sobre submuestras.
+#     Se fija sampsize = 1.000 (el valor por defecto, 40 + 2k = 48, es demasiado
+#     pequeño para una base de este tamaño y da una particion inestable).
+set.seed(2026)
+cl4 <- cluster::clara(Z, k = 4, metric = "euclidean", samples = 50,
+                      sampsize = 1000, pamLike = TRUE)$clustering
+ext_cl <- mean(bd$porc_pob_ext[cl4 == as.integer(names(which.min(table(cl4))))])
+comp_alg <- tibble(
+  Algoritmo = c("Ward (jerárquico)", "K-medias (particional)", "CLARA (k-medoides)"),
+  Silueta   = c(silueta_media(Dm, part_ward[["4"]]), silueta_media(Dm, km_list[["4"]]),
+                silueta_media(Dm, cl4)),
+  Dunn      = c(dunn_dist(Dm, part_ward[["4"]]), dunn_dist(Dm, km_list[["4"]]),
+                dunn_dist(Dm, cl4)),
+  `Grupo menor` = c(min(table(part_ward[["4"]])), min(table(km_list[["4"]])),
+                    min(table(cl4))),
+  `% extranj. del menor` = c(ind_ward["4", "ext_menor"], ind_km["4", "ext_menor"], ext_cl))
+ext_pais <- mean(bd$porc_pob_ext)
+
+# --- Validación externa: ¿3 o 4 grupos reorganizan la solución? (Clase 7) ---
+g3v <- part_ward[["3"]]; g4v <- part_ward[["4"]]
+par_igual <- function(g) {
+  tab <- table(g)
+  sum(choose(as.numeric(tab), 2))
+}
+tab_cruz <- table(g3v, g4v)
+TP <- sum(choose(as.numeric(tab_cruz), 2))
+A  <- par_igual(g3v); B <- par_igual(g4v)
+FN <- A - TP; FP <- B - TP
+TN <- choose(n, 2) - TP - FP - FN
+rand <- (TP + TN) / choose(n, 2); jacc <- TP / (TP + FP + FN)
+
+rm(Dm); invisible(gc())
+```
+
+```{r datos-dendro}
+#| results: asis
+#| cache: true
+# Se dibuja sólo la parte alta del árbol: con 4.843 hojas la parte de abajo es
+# una mancha negra. Se cortan las últimas 55 fusiones, que es lo que se mira.
+dendro_top <- function(hc, N = 55) {
+  m <- hc$merge; hh <- hc$height; nn <- nrow(m)
+  ini <- nn - N + 1
+  base <- function(j) (j < 0) || (j < ini)
+  hojas <- integer(0)
+  rec <- function(j) {
+    if (base(j)) { hojas <<- c(hojas, j); return(invisible(NULL)) }
+    rec(m[j, 1]); rec(m[j, 2])
+  }
+  rec(nn)
+  X <- setNames(as.numeric(seq_along(hojas)), as.character(hojas))
+  Y <- setNames(as.numeric(sapply(hojas, function(j) if (j < 0) 0 else hh[j])),
+                as.character(hojas))
+  seg <- matrix(0, nrow = 3 * N, ncol = 4); r <- 0
+  for (j in ini:nn) {
+    a <- as.character(m[j, 1]); b <- as.character(m[j, 2]); y <- hh[j]
+    seg[r + 1, ] <- c(X[[a]], Y[[a]], X[[a]], y)
+    seg[r + 2, ] <- c(X[[b]], Y[[b]], X[[b]], y)
+    seg[r + 3, ] <- c(X[[a]], y, X[[b]], y); r <- r + 3
+    X[as.character(j)] <- (X[[a]] + X[[b]]) / 2
+    Y[as.character(j)] <- y
+  }
+  list(seg = seg[1:r, , drop = FALSE], nh = length(hojas))
+}
+
+veredicto <- c(
+  single   = "Encadenamiento puro: a simple vista se ve que casi todo se agrupa en un tronco gigante y el resto son zonas sueltas.",
+  complete = "Mejora levemente, pero sigue habiendo ramas minúsculas que no sirven para una tipología equilibrada.",
+  average  = "Lo mismo que el vecino más cercano: un grupo se come casi todas las zonas.",
+  centroid = "Sufre de encadenamiento severo al igual que el promedio, además de posibles inversiones en las ramas.",
+  ward.D2  = "El único que reparte de forma natural: ramas robustas, de tamaño comparable y con estructura clara.")
+
+uno_dendro <- function(mt) {
+  hcm <- arboles[[mt]]; hh <- hcm$height
+  d   <- dendro_top(hcm)
+  mm  <- mojena(hh)
+  sprintf(
+    '{s:[%s],nh:%d,hmax:%s,m1:%s,m2:%s,k1:%d,k2:%d,et:"%s",v:"%s"}',
+    paste(apply(round(d$seg, 3), 1, function(f) paste0("[", paste(f, collapse = ","), "]")),
+          collapse = ","),
+    d$nh, round(max(hh), 2), round(mm[["pc1"]], 2), round(mm[["pc2"]], 2),
+    sum(hh > mm[["pc1"]]) + 1, sum(hh > mm[["pc2"]]) + 1,
+    metodos[[mt]], veredicto[[mt]])
+}
+cat(sprintf('<script>window.DEN=[%s];</script>',
+            paste(sapply(names(metodos), uno_dendro), collapse = ",")))
+```
+
+:::: {.columns}
+::: {.column width="55%"}
+
+```{=html}
+<div class="conmuta">
+<button id="db-0" class="activo" onclick="dendro(0)">V. más cercano</button>
+<button id="db-1" onclick="dendro(1)">V. más lejano</button>
+<button id="db-2" onclick="dendro(2)">Promedio</button>
+<button id="db-3" onclick="dendro(3)">Centroide</button>
+<button id="db-4" onclick="dendro(4)">Ward</button>
+</div>
+<div id="den-lienzo"></div>
+```
+
+```{=html}
+<script>
+(function () {
+var W = 660, H = 400, ML = 60, MR = 14, MT = 16, MB = 26;
+function mil(x) { return String(x).replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+
+function dibujar(k) {
+  var c = window.DEN[k], n = c.nh + 1;
+  var ex = function (x) { return ML + (x / n) * (W - ML - MR); };
+  var ey = function (y) { return H - MB - (y / (c.hmax * 1.06)) * (H - MB - MT); };
+  var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" ' +
+          'aria-label="Dendrograma con enlace ' + c.et + '">';
+  // eje vertical
+  var paso = Math.pow(10, Math.floor(Math.log(c.hmax) / Math.LN10));
+  if (c.hmax / paso < 3) paso = paso / 2;
+  for (var t = 0; t <= c.hmax; t += paso) {
+    s += '<line x1="' + ML + '" y1="' + ey(t) + '" x2="' + (W - MR) + '" y2="' +
+         ey(t) + '" stroke="#DCD5C5" stroke-width="1"/>' +
+         '<text x="' + (ML - 8) + '" y="' + (ey(t) + 5) + '" text-anchor="end" ' +
+         'font-size="15" font-weight="600" fill="#3B4657">' + t + '</text>';
+  }
+  // el árbol
+  var d = "";
+  for (var i = 0; i < c.s.length; i++) {
+    var g = c.s[i];
+    d += "M" + ex(g[0]).toFixed(1) + " " + ey(g[1]).toFixed(1) +
+         "L" + ex(g[2]).toFixed(1) + " " + ey(g[3]).toFixed(1);
+  }
+  s += '<path d="' + d + '" stroke="#1C3D6E" stroke-width="1.5" fill="none"/>';
+  // las dos líneas de Mojena
+  // Primero las líneas y sólo después los rótulos: con Ward las dos
+  // de Mojena quedan casi pegadas y una tapaba el texto de la otra.
+  var cortes = [[c.m1, "#B4652A", "Mojena pc₁ → " + mil(c.k1) + " grupos", false, -9, false],
+                [c.m2, "#5C687A", "Mojena pc₂ → " + mil(c.k2) + " grupos", false, 18, true]];
+  cortes.forEach(function (t) {
+    if (t[0] > c.hmax * 1.06) return;
+    s += '<line x1="' + ML + '" y1="' + ey(t[0]) + '" x2="' + (W - MR) + '" y2="' +
+         ey(t[0]) + '" stroke="' + t[1] + '" stroke-width="2.4"' +
+         (t[3] ? ' stroke-dasharray="7 5"' : '') + '/>';
+  });
+  cortes.forEach(function (t) {
+    if (t[0] > c.hmax * 1.06) return;
+    s += '<text x="' + (t[5] ? ML + 6 : W - MR - 4) + '" y="' + (ey(t[0]) + t[4]) +
+         '" text-anchor="' + (t[5] ? 'start' : 'end') + '" font-size="15" ' +
+         'font-weight="700" paint-order="stroke" stroke="#FAF7F0" stroke-width="4.5" ' +
+         'stroke-linejoin="round" fill="' + t[1] + '">' + t[2] + '</text>';
+  });
+  return s + '</svg>';
+}
+
+window.dendro = function (k) {
+  var caja = document.getElementById("den-lienzo");
+  if (!caja || !window.DEN) return;
+  caja.innerHTML = dibujar(k);
+  for (var j = 0; j < 5; j++) {
+    var b = document.getElementById("db-" + j);
+    if (b) b.className = (j === k) ? "activo" : "";
+  }
+  var c = window.DEN[k], caja2 = document.getElementById("den-lectura");
+  if (caja2) {
+    caja2.innerHTML =
+      '<div class="card amplia' + (k === 4 ? ' cobre' : '') + '">' +
+      '<span class="concepto">' + c.et + '</span><br>' + c.v + '</div>';
+  }
+};
+
+var intentos = 0;
+(function esperar() {
+  if (document.getElementById("den-lienzo") && document.getElementById("den-lectura") && window.DEN) window.dendro(4);
+  else if (++intentos < 40) setTimeout(esperar, 250);
+})();
+})();
+</script>
+```
+
+<p class="nota-fuente">Sólo se dibuja la parte alta del árbol: con 4.843 hojas la parte de abajo es una mancha. Las dos líneas indican los cortes propuestos por el criterio estadístico de **Mojena** en cada estructura.</p>
+:::
+::: {.column width="43%"}
+::: {.card .amplia}
+<span class="concepto">Qué hace y cómo se lee</span>
+Une las dos zonas más parecidas, una y otra vez. La **altura** de la unión es lo distintas que eran; **cortando** a una cierta altura visualizamos el número de ramas (grupos).
+:::
+
+<div id="den-lectura"></div>
+
+::: {.fragment .fade-up}
+::: {.card .cobre}
+<span class="concepto">Por qué gana Ward</span>
+Los métodos clásicos sufren de **encadenamiento**. Si los cortas, no sugieren una partición equilibrada y útil. Sólo **Ward** logra un agrupamiento robusto para la tipología, sin necesidad de forzar los cortes.
+:::
+:::
+:::
+::::
+
+
+## ¿Cuántos grupos? Explorador de $k$ {.smaller}
+
+<span class="tag tag-desc">Validación interna · silueta y Dunn frente a $k$</span>
+
+<p class="nota-fuente">Los grupos se forman con **las ocho variables**. El mapa sólo los **dibuja** sobre las dos primeras componentes, que es el plano donde más se ven.</p>
+
+```{r explorador}
+#| results: asis
+# Se serializa a JavaScript lo mínimo para reproducir en el navegador las tres
+# vistas que se usaron en clases: fviz_cluster (elipses y centroides),
+# fviz_silhouette (perfil de siluetas) y la curva de índices frente a k.
+set.seed(2026)
+ss_e <- sort(sample(n, 1200))
+cpx <- round(acp$x[ss_e, 1], 2); cpy <- round(acp$x[ss_e, 2], 2)
+
+vec_js <- function(x) paste0("[", paste(x, collapse = ","), "]")
+mat_js <- function(lst) paste0("[", paste(sapply(lst, vec_js), collapse = ","), "]")
+
+cat(sprintf(
+  '<script>window.EXPL={x:%s,y:%s,w:%s,m:%s,ew:%s,em:%s,sw:%s,sm:%s,silw:%s,silm:%s,dunw:%s,dunm:%s,tamw:%s,tamm:%s,extw:%s,extm:%s};</script>',
+  vec_js(cpx), vec_js(cpy),
+  mat_js(lapply(part_ward, function(g) as.integer(g[ss_e]))),
+  mat_js(lapply(km_list,   function(g) as.integer(g[ss_e]))),
+  mat_js(lapply(eli_ward, function(v) round(v, 3))),
+  mat_js(lapply(eli_km,   function(v) round(v, 3))),
+  mat_js(lapply(sil_ward, function(v) round(100 * v[ss_e]))),
+  mat_js(lapply(sil_km,   function(v) round(100 * v[ss_e]))),
+  vec_js(round(ind_ward[, "sil"], 3)),  vec_js(round(ind_km[, "sil"], 3)),
+  vec_js(round(ind_ward[, "dunn"], 4)), vec_js(round(ind_km[, "dunn"], 4)),
+  mat_js(lapply(part_ward, function(g) as.integer(table(g)))),
+  mat_js(lapply(km_list,   function(g) as.integer(table(g)))),
+  vec_js(round(ind_ward[, "ext_menor"], 1)), vec_js(round(ind_km[, "ext_menor"], 1))))
+```
+
+:::: {.columns}
+::: {.column width="61%"}
+
+```{=html}
+<div class="explorador">
+<div class="expl-ctrl">
+<div class="expl-met" id="expl-met">
+<button type="button" data-met="0" class="on">Ward &middot; jer&aacute;rquico</button>
+<button type="button" data-met="1">K-medias &middot; particional</button>
+</div>
+<div class="expl-k">
+<span class="rot">Grupos</span>
+<input type="range" id="expl-k" min="2" max="8" step="1" value="4">
+<b id="expl-kval">4</b>
+</div>
+</div>
+<div id="expl-mapa"></div>
+<div id="expl-tam" class="expl-tam"></div>
+<div class="expl-rot">Perfil de siluetas &middot; una barra por zona</div>
+<div id="expl-sil-plot"></div>
+</div>
+```
+
+:::
+::: {.column width="37%"}
+
+```{=html}
+<div class="stat-row">
+<div class="stat-box"><span class="v" id="expl-sil">&mdash;</span><span class="k">silueta media</span></div>
+<div class="stat-box"><span class="v" id="expl-dunn">&mdash;</span><span class="k">&iacute;ndice de Dunn</span></div>
+</div>
+<div class="stat-row">
+<div class="stat-box acento"><span class="v" id="expl-menor">&mdash;</span><span class="k">zonas en el grupo menor</span></div>
+<div class="stat-box acento"><span class="v" id="expl-ext">&mdash;</span><span class="k">% extranjeros en ese grupo</span></div>
+</div>
+<div id="expl-curvas"></div>
+<p id="expl-msg" class="expl-msg">&nbsp;</p>
+```
+
+::: {.card .cobre}
+<span class="concepto">Por qué cuatro grupos</span>
+Hasta $k=3$ el grupo menor son `r format(ind_ward["2","n_menor"], big.mark=".", decimal.mark=",")` zonas con `r coma(ind_ward["2","ext_menor"])` % de extranjeros: el enclave sigue mezclado. En $k=4$ pasa a `r ind_ward["4","n_menor"]` con **`r coma(ind_ward["4","ext_menor"])` %** —el país está en `r coma(ext_pais)` %— y de ahí en adelante ya no cambia.
+:::
+
+:::
+::::
+
+
+```{=html}
+<script>
+(function(){
+  var listo = false;
+
+  function iniciar(){
+    if (listo) return true;
+    var D = window.EXPL;
+    var mapa = document.getElementById('expl-mapa');
+    var ctrlK = document.getElementById('expl-k');
+    var ctrlM = document.getElementById('expl-met');
+    if (!D || !mapa || !ctrlK || !ctrlM) return false;
+    listo = true;
+
+    var PAL = ["#1C3D6E","#B4652A","#7C93B5","#D9A566","#5C687A","#6E9E7E","#9E6E8E","#3F7C8C"];
+    var ARENA = "#FAF7F0", LINEA = "#DCD5C5", PIZ = "#5C687A", TINTA = "#1B2330", COBRE = "#8C4A18";
+    var RAD = 2.4477;                    // sqrt(qchisq(0.95, 2)), como fviz_cluster
+    var met = 0, k = 4;
+
+    function el(id){ return document.getElementById(id); }
+    function pon(id, t){ var e = el(id); if (e) e.textContent = t; }
+    function fmt(x){ return String(x).replace(/\B(?=(\d{3})+(?!\d))/g, "."); }
+    function ticks(lo, hi){
+      var paso = Math.ceil((hi - lo) / 5), t = [], v = Math.ceil(lo / paso) * paso;
+      for (; v <= hi; v += paso) t.push(v);
+      return t;
+    }
+
+    // Elipse de covarianza: solucion cerrada del problema propio de una 2x2
+    function elipse(mx, my, a, b, c, r){
+      var tr = a + c, det = a * c - b * b;
+      var dd = Math.sqrt(Math.max(tr * tr / 4 - det, 0));
+      var l1 = tr / 2 + dd, l2 = Math.max(tr / 2 - dd, 1e-9);
+      var th = (Math.abs(b) < 1e-12) ? (a >= c ? 0 : Math.PI / 2) : Math.atan2(l1 - a, b);
+      var ct = Math.cos(th), st = Math.sin(th);
+      var s1 = Math.sqrt(l1) * r, s2 = Math.sqrt(l2) * r, p = [];
+      for (var i = 0; i <= 44; i++){
+        var t = 2 * Math.PI * i / 44, X = s1 * Math.cos(t), Y = s2 * Math.sin(t);
+        p.push([mx + X * ct - Y * st, my + X * st + Y * ct]);
+      }
+      return p;
+    }
+
+    var W = 660, H = 278, ml = 46, mr = 12, mt = 10, mb = 30;
+    var xmin = Math.min.apply(null, D.x), xmax = Math.max.apply(null, D.x);
+    var ymin = Math.min.apply(null, D.y), ymax = Math.max.apply(null, D.y);
+    function sx(v){ return ml + (v - xmin) / (xmax - xmin) * (W - ml - mr); }
+    function sy(v){ return H - mb - (v - ymin) / (ymax - ymin) * (H - mt - mb); }
+
+    function dibujarMapa(lab, eli, orden, menor){
+      var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="Mapa de conglomerados con elipses">';
+      s += '<rect width="' + W + '" height="' + H + '" fill="' + ARENA + '"/>';
+      var ty = ticks(ymin, ymax), tx = ticks(xmin, xmax), i;
+      for (i = 0; i < ty.length; i++){
+        s += '<line x1="' + ml + '" y1="' + sy(ty[i]).toFixed(1) + '" x2="' + (W - mr) +
+             '" y2="' + sy(ty[i]).toFixed(1) + '" stroke="' + LINEA + '" stroke-width="0.7"/>' +
+             '<text x="' + (ml - 6) + '" y="' + (sy(ty[i]) + 4).toFixed(1) +
+             '" text-anchor="end" font-size="11" fill="' + PIZ + '">' + ty[i] + '</text>';
+      }
+      for (i = 0; i < tx.length; i++)
+        s += '<text x="' + sx(tx[i]).toFixed(1) + '" y="' + (H - mb + 15) +
+             '" text-anchor="middle" font-size="11" fill="' + PIZ + '">' + tx[i] + '</text>';
+
+      for (var o = 0; o < orden.length; o++){
+        var g = orden[o], esMenor = (g === menor);
+        for (i = 0; i < D.x.length; i++){
+          if (lab[i] - 1 !== g) continue;
+          s += '<circle cx="' + sx(D.x[i]).toFixed(1) + '" cy="' + sy(D.y[i]).toFixed(1) +
+               '" r="' + (esMenor ? 2.7 : 2.0) + '" fill="' + PAL[g % 8] +
+               '" opacity="' + (esMenor ? 0.9 : 0.45) + '"/>';
+        }
+      }
+      for (var g2 = 0; g2 < eli.length / 5; g2++){
+        var mx = eli[5*g2], my = eli[5*g2+1];
+        var pts = elipse(mx, my, eli[5*g2+2], eli[5*g2+3], eli[5*g2+4], RAD);
+        var d = '';
+        for (i = 0; i < pts.length; i++)
+          d += (i ? 'L' : 'M') + sx(pts[i][0]).toFixed(1) + ' ' + sy(pts[i][1]).toFixed(1);
+        s += '<path d="' + d + 'Z" fill="' + PAL[g2 % 8] + '" fill-opacity="0.07" stroke="' +
+             PAL[g2 % 8] + '" stroke-width="' + (g2 === menor ? 2.4 : 1.5) + '"/>';
+        var cx = +sx(mx).toFixed(1), cy = +sy(my).toFixed(1);
+        s += '<path d="M' + (cx-5) + ' ' + (cy-5) + 'L' + (cx+5) + ' ' + (cy+5) +
+             'M' + (cx+5) + ' ' + (cy-5) + 'L' + (cx-5) + ' ' + (cy+5) +
+             '" stroke="' + PAL[g2 % 8] + '" stroke-width="2.2" stroke-linecap="round"/>';
+      }
+      s += '<line x1="' + ml + '" y1="' + (H - mb) + '" x2="' + (W - mr) + '" y2="' + (H - mb) +
+           '" stroke="' + PIZ + '" stroke-width="1"/>';
+      s += '<text x="' + ((W + ml) / 2) + '" y="' + (H - 3) + '" text-anchor="middle" font-size="12.5" font-weight="700" fill="' + TINTA + '">CP1 &#183; Deprivaci&#243;n socioecon&#243;mica</text>';
+      s += '<text transform="rotate(-90 13 ' + ((H - mb + mt) / 2) + ')" x="13" y="' + ((H - mb + mt) / 2) +
+           '" text-anchor="middle" font-size="12.5" font-weight="700" fill="' + TINTA + '">CP2 &#183; Hacin. cr&#237;tico migrante</text>';
+      mapa.innerHTML = s + '</svg>';
+    }
+
+    function dibujarSiluetas(lab, sil, orden, menor, media){
+      var caja = el('expl-sil-plot'); if (!caja) return;
+      var w = 660, h = 88, mb2 = 4, mlS = 46, i, o;
+      var grupos = [];
+      for (o = 0; o < orden.length; o++){
+        var g = orden[o], v = [];
+        for (i = 0; i < sil.length; i++) if (lab[i] - 1 === g) v.push(sil[i] / 100);
+        v.sort(function(a, b){ return b - a; });
+        grupos.push({ g: g, v: v });
+      }
+      var total = sil.length, ancho = (w - mlS - 6) / total, x = mlS;
+      var lo = Math.min(-0.2, Math.min.apply(null, sil) / 100), hi = 1;
+      function sy2(v){ return h - mb2 - (v - lo) / (hi - lo) * (h - mb2 - 8); }
+      var s = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" role="img" aria-label="Perfil de siluetas">';
+      s += '<rect width="' + w + '" height="' + h + '" fill="' + ARENA + '"/>';
+      s += '<line x1="' + mlS + '" y1="' + sy2(0).toFixed(1) + '" x2="' + (w - 6) + '" y2="' + sy2(0).toFixed(1) +
+           '" stroke="' + PIZ + '" stroke-width="0.8"/>';
+      s += '<text x="' + (mlS - 6) + '" y="' + (sy2(0) + 4).toFixed(1) + '" text-anchor="end" font-size="10" fill="' + PIZ + '">0</text>';
+      s += '<text x="' + (mlS - 6) + '" y="' + (sy2(1) + 8).toFixed(1) + '" text-anchor="end" font-size="10" fill="' + PIZ + '">1</text>';
+      for (o = 0; o < grupos.length; o++){
+        var col = PAL[grupos[o].g % 8], vs = grupos[o].v;
+        for (i = 0; i < vs.length; i++){
+          var y0 = sy2(Math.max(vs[i], 0)), y1 = sy2(Math.min(vs[i], 0));
+          s += '<rect x="' + x.toFixed(2) + '" y="' + y0.toFixed(1) + '" width="' + (ancho + 0.35).toFixed(2) +
+               '" height="' + Math.max(y1 - y0, 0.4).toFixed(1) + '" fill="' + col +
+               '" opacity="' + (grupos[o].g === menor ? 0.95 : 0.6) + '"/>';
+          x += ancho;
+        }
+      }
+      s += '<line x1="' + mlS + '" y1="' + sy2(media).toFixed(1) + '" x2="' + (w - 6) + '" y2="' + sy2(media).toFixed(1) +
+           '" stroke="' + COBRE + '" stroke-dasharray="4 3" stroke-width="1.4"/>';
+      s += '<text x="' + (mlS + 7) + '" y="' + (sy2(media) - 4).toFixed(1) + '" font-size="10.5" font-weight="700" fill="' + COBRE +
+           '">media ' + media.toFixed(3).replace('.', ',') + '</text>';
+      caja.innerHTML = s + '</svg>';
+    }
+
+    function dibujarCurvas(){
+      var caja = el('expl-curvas'); if (!caja) return;
+      var w = 430, h = 196, mL = 44, mR = 26, mT = 18, mB = 22;
+      var alto = (h - mT - mB - 34) / 2;
+      var series = [
+        { nom: 'Silueta media', v: (met === 0 ? D.silw : D.silm), y0: mT, col: '#1C3D6E', dec: 2 },
+        { nom: 'Índice de Dunn', v: (met === 0 ? D.dunw : D.dunm), y0: mT + alto + 38, col: '#B4652A', dec: 3 }
+      ];
+      var s = '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" role="img" aria-label="Indices frente a k">';
+      s += '<rect width="' + w + '" height="' + h + '" fill="' + ARENA + '"/>';
+      for (var p = 0; p < 2; p++){
+        var v = series[p].v, y0 = series[p].y0;
+        var lo = Math.min.apply(null, v), hi = Math.max.apply(null, v);
+        var px = function(i){ return mL + i / 6 * (w - mL - mR); };
+        var py = function(t){ return y0 + alto - (t - lo) / ((hi - lo) || 1) * alto; };
+        s += '<rect x="' + (px(k - 2) - (w - mL - mR) / 14).toFixed(1) + '" y="' + (y0 - 5) + '" width="' +
+             ((w - mL - mR) / 7).toFixed(1) + '" height="' + (alto + 10) + '" fill="#E5EAF3"/>';
+        s += '<text x="' + mL + '" y="' + (y0 - 9) + '" font-size="10.5" font-weight="700" fill="' + PIZ + '">' + series[p].nom + '</text>';
+        var d = '', i;
+        for (i = 0; i < 7; i++) d += (i ? 'L' : 'M') + px(i).toFixed(1) + ' ' + py(v[i]).toFixed(1);
+        s += '<path d="' + d + '" fill="none" stroke="' + series[p].col + '" stroke-width="1.8"/>';
+        for (i = 0; i < 7; i++)
+          s += '<circle cx="' + px(i).toFixed(1) + '" cy="' + py(v[i]).toFixed(1) + '" r="' + (i === k - 2 ? 4.2 : 2.4) +
+               '" fill="' + series[p].col + '"/>';
+        s += '<text x="' + (mL - 5) + '" y="' + (py(hi) + 4).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + PIZ + '">' + hi.toFixed(series[p].dec) + '</text>';
+        s += '<text x="' + (mL - 5) + '" y="' + (py(lo) + 4).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + PIZ + '">' + lo.toFixed(series[p].dec) + '</text>';
+      }
+      for (var q = 0; q < 7; q++)
+        s += '<text x="' + (mL + q / 6 * (w - mL - mR)).toFixed(1) + '" y="' + (h - 5) + '" text-anchor="middle" font-size="10.5" fill="' + PIZ + '">' + (q + 2) + '</text>';
+      s += '<text x="' + (mL - 8) + '" y="' + (h - 5) + '" text-anchor="end" font-size="10" font-style="italic" fill="' + PIZ + '">k</text>';
+      caja.innerHTML = s + '</svg>';
+    }
+
+    function dibujar(){
+      var lab = (met === 0 ? D.w : D.m)[k - 2];
+      var eli = (met === 0 ? D.ew : D.em)[k - 2];
+      var sil = (met === 0 ? D.sw : D.sm)[k - 2];
+      var tam = (met === 0 ? D.tamw : D.tamm)[k - 2];
+      var med = (met === 0 ? D.silw : D.silm)[k - 2];
+      var dun = (met === 0 ? D.dunw : D.dunm)[k - 2];
+      var ext = (met === 0 ? D.extw : D.extm)[k - 2];
+
+      var orden = [], i;
+      for (i = 0; i < tam.length; i++) orden.push(i);
+      orden.sort(function(a, b){ return tam[b] - tam[a]; });
+      var menor = orden[orden.length - 1];
+
+      dibujarMapa(lab, eli, orden, menor);
+      dibujarSiluetas(lab, sil, orden, menor, med);
+      dibujarCurvas();
+
+      var chips = '';
+      for (var q = 0; q < orden.length; q++){
+        var gg = orden[q];
+        chips += '<span class="chip' + (gg === menor ? ' min' : '') + '"><i style="background:' +
+                 PAL[gg % 8] + '"></i>' + fmt(tam[gg]) + (gg === menor ? ' &#183; el menor' : '') + '</span>';
+      }
+      var ct = el('expl-tam'); if (ct) ct.innerHTML = chips;
+
+      pon('expl-sil',   med.toFixed(3).replace('.', ','));
+      pon('expl-dunn',  dun.toFixed(4).replace('.', ','));
+      pon('expl-menor', fmt(Math.min.apply(null, tam)));
+      pon('expl-ext',   ext.toFixed(1).replace('.', ',') + ' %');
+      pon('expl-kval',  k);
+
+      var msg = el('expl-msg');
+      if (msg){
+        if (ext > 20){
+          msg.innerHTML = '<b>El enclave migrante ya est&aacute; separado.</b>';
+          msg.className = 'expl-msg on';
+        } else {
+          msg.innerHTML = 'El enclave migrante sigue mezclado con el resto.';
+          msg.className = 'expl-msg';
+        }
+      }
+    }
+
+    ctrlK.addEventListener('input', function(e){ k = parseInt(e.target.value, 10); dibujar(); });
+    var botones = ctrlM.querySelectorAll('button');
+    for (var b = 0; b < botones.length; b++){
+      botones[b].addEventListener('click', function(e){
+        met = parseInt(e.currentTarget.getAttribute('data-met'), 10);
+        for (var j = 0; j < botones.length; j++) botones[j].className = '';
+        e.currentTarget.className = 'on';
+        dibujar();
+      });
+    }
+    dibujar();
+    return true;
+  }
+
+  if (!iniciar()){
+    document.addEventListener('DOMContentLoaded', iniciar);
+    window.addEventListener('load', iniciar);
+    var intentos = 0;
+    var reloj = setInterval(function(){
+      if (iniciar()){ clearInterval(reloj); return; }
+      if (++intentos > 40){
+        clearInterval(reloj);
+        var l = document.getElementById('expl-mapa');
+        if (l) l.innerHTML = '<p style="font-size:.55em;color:#8C4A18;padding:1.2em .4em">' +
+          'El explorador interactivo no se carg&oacute;. Vuelve a renderizar el documento; ' +
+          'la partici&oacute;n adoptada es k = 4 y sus cifras est&aacute;n en la l&aacute;mina siguiente.</p>';
+      }
+    }, 250);
+  }
+})();
+</script>
+```
+
+## Validación: ¿la tipología depende del método? {.smaller .densa}
+
+<span class="tag tag-inf">Validación interna y externa</span>
+
+:::: {.columns}
+::: {.column width="52%"}
+<span class="tag tag-desc">Los cinco métodos de enlace · $k=4$</span>
+
+```{r tabla-enlace}
+comp_enlace |>
+  mutate(Método = c("Vecino más cercano", "Vecino más lejano", "Promedio",
+                    "Centroide", "Ward")) |>
+  tabla_dep(size = 16, padding = 4) |>
+  fmt_number(columns = c(Silueta, Dunn), decimals = 3) |>
+  fmt_number(columns = `Grupo mayor (%)`, decimals = 1) |>
+  cols_align(align = "center", columns = -Método) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Método)) |>
+  tab_style(style = cell_fill(color = azul_tint), locations = cells_body(rows = 5))
+```
+
+::: {.card .amplia .cobre}
+<span class="concepto">Un índice alto no significa una buena partición</span>
+Los cuatro primeros ganan a Ward en los **dos** índices… dejando al `r round(max(comp_enlace[["Grupo mayor (%)"]][1:4]),1)` % de las zonas en un solo grupo. Es el **encadenamiento**: <br>Ward es el único enlace que da grupos utilizables.
+:::
+:::
+::: {.column width="46%"}
+<span class="tag tag-desc">Contraste con clustering particional · $k=4$</span>
+
+```{r tabla-alg}
+comp_alg |>
+  tabla_dep(size = 16, padding = 5) |>
+  fmt_number(columns = c(Silueta, Dunn), decimals = 3) |>
+  fmt_number(columns = `% extranj. del menor`, decimals = 1) |>
+  cols_align(align = "center", columns = -Algoritmo) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = Algoritmo)) |>
+  tab_style(style = cell_fill(color = "#F5DCC8"),
+            locations = cells_body(columns = `% extranj. del menor`))
+```
+
+::: {.fragment .fade-up}
+::: {.panel-invertido}
+**1. K-Medias lo valida:** Con criterios matemáticos distintos, aísla el mismo enclave (`r comp_alg[["Grupo menor"]][2]` zonas). PAM no lo ve por ser robusto a atípicos (y aquí los atípicos *son* el fenómeno).
+
+**2. ¿Por qué elegimos Ward?** Es determinista (siempre da el mismo resultado sin semillas al azar) y nos revela la historia y linaje de los grupos en un dendrograma.
+:::
+:::
+:::
+::::
+
+
+
+## Los cuatro grupos {.smaller}
+
+```{r perfiles}
+g4  <- part_ward[["4"]]
+ord <- order(tapply(bd$indice_deprivacion2_norm, g4, mean))
+nom_g <- c("G1 · Acomodada", "G2 · Enclave migrante",
+           "G3 · Media consolidada", "G4 · Deprivación alta")
+bd$grupo <- factor(nom_g[setNames(seq_along(ord), ord)[as.character(g4)]], levels = nom_g)
+
+perf <- bd |>
+  group_by(grupo) |>
+  summarise(Zonas = n(),
+            across(all_of(c("porc_hacinamiento_medio", "porc_hacinamiento_alto",
+                            "porc_hacinamiento_critico", "porc_desocupacion",
+                            "escolaridad", "porc_hog_monop_mujer",
+                            "porc_pob_may_vive_sola", "porc_pob_ext")), mean),
+            Índice = mean(indice_deprivacion2_norm), .groups = "drop") |>
+  rename_with(~ ifelse(.x %in% names(etiquetas), unname(etiquetas[.x]), .x))
+
+ind_g <- tapply(bd$indice_deprivacion2_norm, bd$grupo, mean)
+ext_g <- tapply(bd$porc_pob_ext, bd$grupo, mean)
+cri_g <- tapply(bd$porc_hacinamiento_critico, bd$grupo, mean)
+n_g2  <- sum(bd$grupo == nom_g[2])
+```
+
+```{r tabla-perfiles}
+perf |>
+  tabla_dep(size = 12, padding = 2) |>
+  fmt_number(columns = -c(grupo, Zonas), decimals = 2) |>
+  fmt_number(columns = Índice, decimals = 3) |>
+  fmt_number(columns = Zonas, decimals = 0, sep_mark = ".") |>
+  cols_label(grupo = "Grupo",
+             `Hacinamiento medio`    = "Hac. medio",
+             `Hacinamiento alto`     = "Hac. alto",
+             `Hacinamiento crítico`  = "Hac. crít.",
+             `Desocupación`          = "Desocup.",
+             `Escolaridad`           = "Escolar.",
+             `Hogares monop. mujer`  = "Monop. mujer",
+             `Pob. mayor vive sola`  = "Mayores solos",
+             `Población extranjera`  = "Extranj.") |>
+  cols_width(grupo ~ px(158), Zonas ~ px(54)) |>
+  cols_align(align = "center", columns = -grupo) |>
+  tab_style(style = cell_text(weight = "700", color = azul),
+            locations = cells_body(columns = grupo)) |>
+  data_color(columns = Índice, palette = c(azul_tint, cobre), domain = c(0.18, 0.52)) |>
+  tab_spanner(label = "Medias de las ocho variables (%, años)", columns = 3:10)
+```
+
+:::: {.columns}
+::: {.column width="47%"}
+```{r radar-grupos}
+#| fig.width: 5.5
+#| fig.height: 3.0
+m_g <- as.matrix(aggregate(Z, by = list(bd$grupo), FUN = mean)[, -1])
+rownames(m_g) <- nom_g
+radar_dep(m_g, et_corta, setNames(pal4, nom_g)) +
+  guides(fill = guide_legend(nrow = 2), color = guide_legend(nrow = 2)) +
+  theme(legend.text   = element_text(size = 8.5),
+        legend.margin = margin(t = -6),
+        legend.key.size = unit(0.42, "cm"))
+```
+:::
+::: {.column width="51%"}
+::: {.fragment .fade-up}
+::: {.panel-invertido}
+**G2 recibe un índice de `r round(ind_g[2],3)`: más bajo que G3 (`r round(ind_g[3],3)`) y que G4 (`r round(ind_g[4],3)`)**, pese a tener el `r round(ext_g[2],1)` % de población extranjera y el `r round(cri_g[2],2)` % de hacinamiento crítico, lo peor del país.
+:::
+:::
+
+::: {.fragment .fade-up}
+Cada grupo se nombra por **su fila en la tabla**. Y la estrella explica a G2: tiene escolaridad **alta** y pocos hogares monoparentales —dos de las cuatro variables del índice— y eso compensa al hacinamiento.
+:::
+
+<p class="nota-fuente">Comunas que **más zonas aportan** a cada grupo:<br>**G1** Las Condes, Viña del Mar<br>**G2** Santiago, Independencia, Iquique <br>**G3** Valparaíso, Maipú <br>**G4** Cerro Navia, La Pintana.</p>
+:::
+::::
+
+
+## <span class="section-kicker">09 · Correspondencias</span>Territorio y tipo de carencia {.smaller .densa}
+
+```{r correspondencia}
+Tab <- table(bd$macrozona, bd$grupo)
+chi <- suppressWarnings(chisq.test(Tab))
+inercia <- as.numeric(chi$statistic) / sum(Tab)
+
+P  <- as.matrix(Tab) / sum(Tab)
+f  <- rowSums(P); c_ <- colSums(P)
+A  <- diag(1/sqrt(f)) %*% (P - f %*% t(c_)) %*% diag(1/sqrt(c_))
+sv <- svd(A); ine <- sv$d^2; pct <- 100 * ine / sum(ine)
+coord_f <- diag(1/sqrt(f)) %*% sv$u %*% diag(sv$d)
+coord_c <- diag(1/sqrt(c_)) %*% sv$v %*% diag(sv$d)
+rownames(coord_f) <- rownames(Tab); rownames(coord_c) <- colnames(Tab)
+pfila <- round(100 * prop.table(Tab, 1), 1)
+```
+
+:::: {.columns}
+::: {.column width="54%"}
+::: {.panel-tabset}
+### Mapa perceptual
+```{r mapa-ac}
+#| fig.width: 6.3
+#| fig.height: 5.2
+bind_rows(
+  as_tibble(coord_f[, 1:2], .name_repair = ~ c("D1", "D2")) |>
+    mutate(lab = rownames(coord_f), tipo = "Macrozona"),
+  as_tibble(coord_c[, 1:2], .name_repair = ~ c("D1", "D2")) |>
+    mutate(lab = rownames(coord_c), tipo = "Grupo")) |>
+  ggplot(aes(D1, D2, color = tipo, shape = tipo)) +
+  geom_hline(yintercept = 0, color = linea, linewidth = 0.4) +
+  geom_vline(xintercept = 0, color = linea, linewidth = 0.4) +
+  geom_point(size = 3.4) +
+  geom_text_repel(aes(label = lab), family = "Montserrat", fontface = "bold",
+                  size = 3.6, seed = 3, box.padding = 0.45, show.legend = FALSE) +
+  scale_color_manual(values = c(Macrozona = azul, Grupo = cobre)) +
+  scale_shape_manual(values = c(Macrozona = 16, Grupo = 17)) +
+  labs(x = paste0("Dimensión 1 (", round(pct[1], 1), " %)"),
+       y = paste0("Dimensión 2 (", round(pct[2], 1), " %)")) +
+  tema_dep(base_size = 13)
+```
+
+### Tabla (perfiles)
+```{r tabla-pfila}
+df_pfila <- as.data.frame.matrix(pfila)
+colnames(df_pfila) <- c("G1 Acomodada", "G2 Enclave Migrante", "G3 Media Consolidada", "G4 Deprivación Alta")
+df_pfila |>
+  rownames_to_column("Macrozona") |>
+  tabla_dep(size = 17, padding = 7) |>
+  fmt_number(columns = -Macrozona, decimals = 1, dec_mark = ",", sep_mark = ".") |>
+  tab_style(style = cell_text(weight = "bold", color = azul),
+            locations = cells_body(columns = Macrozona))
+```
+:::
+:::
+::: {.column width="44%"}
+::: {.contraste}
+<span class="h">H₀</span> macrozona y grupo son **independientes**
+
+<span class="h">H₁</span> están asociados
+
+<span class="est">$\chi^2_{`r chi$parameter`}=$ `r round(chi$statistic, 0)`</span>, <span class="p">$p$ `r fmt_p(chi$p.value)`</span> · inercia $=\chi^2/n=$ `r round(inercia, 3)`
+
+<span class="fallo">Se rechaza H₀.<br>El AC descompone ese $\chi^2$: `r round(pct[1] + pct[2], 1)` % en el plano.</span>
+:::
+
+::: {.fragment .fade-up}
+::: {.card .amplia}
+<span class="concepto">Dimensión 1 · `r round(pct[1],1)` % de la inercia</span>
+Contrapone el **Norte Grande** —atraído por el enclave y por la deprivación alta— con la **Zona Sur** y la **Austral**.
+:::
+:::
+
+::: {.fragment .fade-up}
+<div class="stat-row">
+  <div class="stat-box acento"><span class="v">`r round(pfila["Norte Grande", nom_g[2]] + pfila["Norte Grande", nom_g[4]], 1)` %</span><span class="k">del Norte Grande en grupos críticos</span></div>
+  <div class="stat-box"><span class="v">`r round(pfila["Zona Sur", nom_g[2]] + pfila["Zona Sur", nom_g[4]], 1)` %</span><span class="k">de la Zona Sur</span></div>
+</div>
+:::
+
+::: {.fragment .fade-up}
+::: {.card .amplia .cobre}
+<span class="concepto">Asociación clara, inercia baja</span>
+El territorio **inclina** la composición de perfiles; no la determina.
+:::
+:::
+
+<p class="nota-fuente">Cercanía entre categorías de **distinta** variable = asociación;<br>de la **misma** variable = similitud.</p>
+:::
+::::
+
+
+## <span class="section-kicker">10 · Clasificación supervisada</span>¿Puede el índice detectar el enclave? {.smaller}
+
+<span class="tag tag-inf">Regresión logística · sensibilidad, especificidad y curva ROC</span>
+
+```{r roc}
+#| cache: true
+y01 <- as.integer(bd$grupo == nom_g[2])
+
+# Las dos entradas que se comparan: las 8 variables frente al índice oficial solo
+Xd8 <- X
+Xd1 <- data.frame(indice = bd$indice_deprivacion2_norm)
+
+cv_prob <- function(Xd, y01, K = 10, semilla = 2026) {
+  set.seed(semilla)
+  folds <- sample(rep_len(1:K, length(y01)))
+  pr <- numeric(length(y01))
+  for (kk in seq_len(K)) {
+    te <- folds == kk
+    m  <- suppressWarnings(glm(y ~ ., family = binomial,
+                               data = cbind(Xd[!te, , drop = FALSE], y = y01[!te])))
+    pr[te] <- predict(m, newdata = Xd[te, , drop = FALSE], type = "response")
+  }
+  pr
+}
+
+# Curva ROC y AUC calculados directamente (equivalen a ROCR / pROC, usados en clases)
+roc_df <- function(prob, y) {
+  o <- order(prob, decreasing = TRUE); yy <- y[o]
+  tibble(fpr = c(0, cumsum(1 - yy) / sum(1 - yy)),
+         tpr = c(0, cumsum(yy) / sum(yy)),
+         umbral = c(Inf, prob[o]))
+}
+auc_mw <- function(prob, y) {
+  r <- rank(prob); n1 <- sum(y == 1); n0 <- sum(y == 0)
+  (sum(r[y == 1]) - n1 * (n1 + 1) / 2) / (n1 * n0)
+}
+
+pr8 <- cv_prob(Xd8, y01); pr1 <- cv_prob(Xd1, y01)
+roc8 <- roc_df(pr8, y01) |> mutate(modelo = "Con las 8 variables")
+roc1 <- roc_df(pr1, y01) |> mutate(modelo = "Con sólo el índice oficial")
+auc8 <- auc_mw(pr8, y01); auc1 <- auc_mw(pr1, y01)
+
+# Punto de corte de Youden: maximiza sensibilidad + especificidad − 1
+you <- bind_rows(roc8, roc1) |>
+  group_by(modelo) |> slice_max(tpr - fpr, n = 1, with_ties = FALSE) |> ungroup()
+sens8 <- you$tpr[you$modelo == "Con las 8 variables"]
+esp8  <- 1 - you$fpr[you$modelo == "Con las 8 variables"]
+sens1 <- you$tpr[you$modelo == "Con sólo el índice oficial"]
+esp1  <- 1 - you$fpr[you$modelo == "Con sólo el índice oficial"]
+
+# Matriz de confusión en el punto de Youden, para las dos entradas
+mat_conf <- function(prob, umbral) {
+  pred <- prob >= umbral
+  c(VP = sum(pred & y01 == 1), FP = sum(pred & y01 == 0),
+    FN = sum(!pred & y01 == 1), VN = sum(!pred & y01 == 0))
+}
+u8 <- you$umbral[you$modelo == "Con las 8 variables"]
+u1 <- you$umbral[you$modelo == "Con sólo el índice oficial"]
+cm8 <- mat_conf(pr8, u8); cm1 <- mat_conf(pr1, u1)
+n_pos <- sum(y01 == 1); n_neg <- sum(y01 == 0)
+
+html_confusion <- function(umbral8, umbral1, titulo) {
+  c8 <- mat_conf(pr8, umbral8); c1 <- mat_conf(pr1, umbral1)
+  
+  sens <- 100 * c8[["VP"]] / (c8[["VP"]] + c8[["FN"]])
+  esp  <- 100 * c8[["VN"]] / (c8[["VN"]] + c8[["FP"]])
+
+  cat(sprintf('
+<div class="confusion" style="margin-top: -0.2em;">
+<div class="cabecera" style="font-size: 1.05em; padding: 4px;">%s</div>
+<table style="width: 100%%; font-size: 1.15em;">
+<tr><td class="esq"></td><th>Predice <b>G2</b></th><th>Predice resto</th></tr>
+<tr><th>Es <b>G2</b> (%d)</th>
+<td class="ok">%d<span>verd. positivos</span></td>
+<td class="mal">%d<span>falsos negativos</span></td></tr>
+<tr><th>No es G2 (%s)</th>
+<td class="mal">%d<span>falsos positivos</span></td>
+<td class="ok">%s<span>verd. negativos</span></td></tr>
+</table>
+<div class="pie" style="font-size: 1.05em;">Sensibilidad <b>%.1f%%</b> &middot; Especificidad <b>%.1f%%</b><br>
+Con <b>sólo el índice</b>: %d aciertos y <b>%s falsos positivos</b>.</div>
+</div>
+', titulo, n_pos, c8[["VP"]], c8[["FN"]], format(n_neg, big.mark=".", decimal.mark=","), 
+c8[["FP"]], format(c8[["VN"]], big.mark=".", decimal.mark=","), sens, esp, c1[["VP"]], format(c1[["FP"]], big.mark=".", decimal.mark=",")))
+}
+```
+
+:::: {.columns}
+::: {.column width="50%"}
+::: {.panel-tabset}
+### Gráfico ROC
+```{r plot-roc}
+#| fig.width: 5.4
+#| fig.height: 3.8
+bind_rows(roc8, roc1) |>
+  ggplot(aes(fpr, tpr, color = modelo)) +
+  geom_abline(slope = 1, intercept = 0, color = pizarra, linetype = "22", linewidth = 0.5) +
+  geom_line(linewidth = 1.1) +
+  geom_point(data = you, size = 3, show.legend = FALSE) +
+  geom_text(data = you, aes(label = "punto de Youden"), hjust = 0,
+            nudge_x = 0.05, nudge_y = -0.075,
+            family = "Montserrat", fontface = "bold", size = 3.2, show.legend = FALSE) +
+  scale_color_manual(values = c("Con las 8 variables" = azul,
+                                "Con sólo el índice oficial" = cobre),
+                     labels = c("Las 8 variables", "Sólo el índice")) +
+  guides(color = guide_legend(nrow = 1)) +
+  # Sin coord_equal: el panel cuadrado dejaba un tercio de la lámina en blanco
+  # a los lados. Los dos ejes siguen yendo de 0 a 1 y la diagonal se lee igual.
+  scale_x_continuous(limits = c(0, 1), expand = expansion(mult = 0.01),
+                     labels = function(v) coma(v, 2)) +
+  scale_y_continuous(limits = c(0, 1), expand = expansion(mult = 0.01),
+                     labels = function(v) coma(v, 2)) +
+  labs(x = "1 − especificidad (falsos positivos)", y = "Sensibilidad (recall)") +
+  tema_dep(base_size = 13)
+```
+
+### Corte Óptimo
+```{r}
+#| results: asis
+html_confusion(u8, u1, "Corte de Youden")
+```
+### Estricto (0.50)
+```{r}
+#| results: asis
+html_confusion(0.50, 0.50, "Corte estricto: prioriza evitar falsas alarmas")
+```
+:::
+:::
+::: {.column width="48%"}
+::: {.panel-invertido}
+**El positivo es pertenecer a G2**, el enclave migrante: `r n_pos` de `r format(n, big.mark=".", decimal.mark=",")` zonas (`r round(100*n_pos/n,1)` %). La pregunta se vuelve binaria: *¿es esta zona parte del enclave?*
+:::
+
+<div class="stat-row">
+  <div class="stat-box"><span class="v">`r round(auc8, 3)`</span><span class="k">AUC con las 8 variables</span></div>
+  <div class="stat-box acento"><span class="v">`r round(auc1, 3)`</span><span class="k">AUC con sólo el índice</span></div>
+</div>
+
+::: {.fragment .fade-up}
+Sensibilidad `r round(100*sens8,1)` % y especificidad `r round(100*esp8,1)` % con las ocho. Con el índice, la especificidad cae a `r round(100*esp1,1)` %.
+:::
+
+::: {.fragment .fade-up}
+::: {.card .amplia .cobre}
+<span class="concepto">Hipótesis 2 respaldada</span>
+El AUC no depende del umbral: no se arregla moviendo el corte. **La información no está en el índice.**
+:::
+:::
+:::
+::::
+
+
+## <span class="section-kicker">11 · Integración</span>La cadena, en seis eslabones {.smaller}
+
+```{=html}
+<div class="cadena-viz">
+<div class="paso"><span class="n">1</span><span class="t">Un bloque no encaja</span><span class="c">0,52</span><span class="d">Va con población extranjera… pero ésta va con <b>más</b> escolaridad (+0,37).</span></div>
+<div class="paso"><span class="n">2</span><span class="t">Hacen falta tres ejes</span><span class="c">75,6 %</span><span class="d">ACP y factorial, con supuestos distintos, dan la <b>misma</b> solución de tres ejes.</span></div>
+<div class="paso ac"><span class="n">3</span><span class="t">El índice ve uno solo</span><span class="c">−0,337</span><span class="d">Su correlación con la CP2, que vale un cuarto de la varianza (con la CP1, 0,907).</span></div>
+<div class="paso ac"><span class="n">4</span><span class="t">Hay un grupo invisible</span><span class="c">198</span><span class="d">Zonas con 29,3 % de extranjeros que el índice ubica <b>bajo</b> la periferia clásica.</span></div>
+<div class="paso ac"><span class="n">5</span><span class="t">Nadie lo recupera</span><span class="c">0,650</span><span class="d">AUC para detectarlo con el índice; con las ocho variables, <b>0,993</b>.</span></div>
+<div class="paso"><span class="n">6</span><span class="t">Todo pasa bajo la comuna</span><span class="c">64,6 %</span><span class="d">De la variabilidad de la CP1 es <b>intracomunal</b>: la escala es submunicipal.</span></div>
+</div>
+```
+
+
+
+
+## <span class="section-kicker">12 · Cierre</span>Conclusiones {.smaller}
+
+::: {.incremental}
+- **La deprivación urbana chilena no es unidimensional.** Tres ejes incorrelacionados explican el `r round(tab_ev[["% acumulado"]][3],1)` % de la estructura, y dos técnicas con supuestos distintos llegan a la misma solución.
+
+- **El índice oficial mide bien, pero mide poco.** Captura la carencia clásica ($r =$ `r round(r_cp[1],3)` con la CP1) y deja fuera una cuarta parte de la información.
+
+- **Esa omisión tiene consecuencias concretas.** `r n_g2` zonas con `r round(ext_g[2],1)` % de población extranjera y las peores condiciones de vivienda del país quedan **por debajo** de la periferia clásica. Ningún clasificador logra reconstruirlas desde el índice: el AUC cae de `r round(auc8,3)` a `r round(auc1,3)`.
+
+- **Y la política basada en promedios comunales opera sobre una ficción estadística.** El `r round(tab_dv$intra[3],1)` % de la variabilidad ocurre **dentro** de cada comuna.
+:::
+
+
+## {background-color="#1C3D6E"}
+
+::: {.hook-slide}
+<p class="hook-line" style="color:#FAF7F0;">Medir la carencia con <em style="background:none; color:#E0A96B;">un</em> número obliga a elegir <em style="background:none; color:#E0A96B;">qué</em> carencia mirar.</p>
+
+<p style="font-size:0.55em; color:#E5EAF3; max-width:68%; margin-top:0.9em;" class="fragment fade-up">
+Tres dimensiones, cuatro grupos y dos tercios de la variabilidad dentro de cada comuna. La evidencia sugiere que el próximo índice territorial chileno debería ser un vector, no un escalar.
+</p>
+:::

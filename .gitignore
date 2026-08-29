@@ -1,0 +1,35 @@
+# ---- R y RStudio ----
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj.user
+
+# ---- Quarto ----
+/.quarto/
+*_files/
+*_cache/
+/_site/
+
+# ---- Salidas temporales ----
+Rplots.pdf
+
+# ---- Windows ----
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ---- Datos pesados ----
+# La cartografía censal (shapefiles, geopackages) NO entra al repositorio:
+# pesan cientos de MB y, una vez dentro del historial de Git, no salen fácil.
+# En el README se explica de dónde bajarla.
+data/raw/
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.sbn
+*.sbx
+*.gpkg
+*.gdb/

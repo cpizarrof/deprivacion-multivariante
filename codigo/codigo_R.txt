@@ -1,0 +1,419 @@
+# Tarea 2 - Metodos Multivariantes
+# Grupo 2: Nicole Gana, Carlos Pizarro, Camila Toloza
+# Base: deprivacion, 4843 zonas censales urbanas, Censo 2017
+
+
+# Lectura
+
+bd=read.csv("datos_sin_geometry.csv",sep=";",dec=".",fileEncoding="latin1",row.names=1)
+dim(bd)
+names(bd)
+sum(is.na(bd))
+
+#los cuatro porcentajes de hacinamiento suman 100, con los cuatro la matriz es singular
+#el indice de deprivacion que viene en la base se guarda para comparar al final
+X=bd[,c("porc_hacinamiento_medio","porc_hacinamiento_alto","porc_hacinamiento_critico",
+        "porc_desocupacion","escolaridad","porc_hog_monop_mujer",
+        "porc_pob_may_vive_sola","porc_pob_ext")]
+n=nrow(X)
+p=ncol(X)
+indice=bd$indice_deprivacion2_norm
+
+#macrozonas, se usan como grupos en la inferencia y en correspondencias
+reg=as.character(bd$codigo_region)
+macro=rep(NA,n)
+macro[reg %in% c("15","1","2")]="Norte Grande"
+macro[reg %in% c("3","4")]="Norte Chico"
+macro[reg %in% c("5","13","6","7")]="Zona Central"
+macro[reg %in% c("16","8","9","14","10")]="Zona Sur"
+macro[reg %in% c("11","12")]="Zona Austral"
+macro=factor(macro,levels=c("Norte Grande","Norte Chico","Zona Central","Zona Sur","Zona Austral"))
+table(macro)
+
+
+# Descriptiva multivariante
+
+summary(X)
+S=cov(X)
+R=cor(X)
+round(R,2)
+
+sum(diag(S))    #varianza total
+det(S)          #varianza generalizada
+det(R)          #si se acerca a 0 hay variables redundantes
+
+#con las 11 variables originales el determinante casi se anula
+V11=c("porc_sin_hacinamiento","porc_hacinamiento_medio","porc_hacinamiento_alto",
+      "porc_hacinamiento_critico","hacinamiento","porc_desocupacion","porc_pob_ext",
+      "porc_pob_may_vive_sola","porc_hog_monop_mujer","escolaridad")
+det(cor(bd[,V11]))
+
+heatmap(R,symm=TRUE,margins=c(10,10))
+
+#segunda medida de asociacion: spearman, que es pearson sobre los rangos
+Rs=cor(X,method="spearman")
+round(Rs,2)
+eigen(R)$values
+eigen(Rs)$values      #los mismos ejes con las dos medidas
+
+#congruencia de Tucker entre las cargas de los dos ejes 2
+cong=function(a,b) sum(a*b)/sqrt(sum(a^2)*sum(b^2))
+cargas2=function(M){ v=eigen(M); v$vectors[,1:2]%*%diag(sqrt(v$values[1:2])) }
+Lp=cargas2(R); Ls=cargas2(Rs)
+abs(cong(Lp[,2],Ls[,2]))   #cerca de 1: la estructura no depende de la medida
+#se toma valor absoluto porque el signo de un eje propio es arbitrario
+
+#la correlacion extranjeros-hacinamiento critico es de cola, no un gradiente
+alto=X$porc_pob_ext>quantile(X$porc_pob_ext,0.8)
+cor(X$porc_pob_ext[alto],X$porc_hacinamiento_critico[alto])
+cor(X$porc_pob_ext[!alto],X$porc_hacinamiento_critico[!alto])
+
+
+# Distancias y casos atipicos
+
+Z=scale(X)
+D=dist(Z,method="euclidean")
+head(D)
+
+D2=dist(Z,method="minkowski",p=1)
+min(D2)
+
+#distancia de mahalanobis respecto al centro
+d=mahalanobis(X,colMeans(X),S)
+umbral=qchisq(0.95,p)
+umbral
+length(d[which(d>umbral)])          #cuantas zonas superan el 95%
+100*length(d[which(d>umbral)])/n
+length(d[which(d>qchisq(0.999,p))]) #las realmente extremas
+
+atip=order(d,decreasing=TRUE)[1:9]
+bd$nombre_comuna[atip]
+
+#grafico de estrellas de las nueve zonas mas atipicas
+palette(rainbow(9,s=0.6,v=0.75))
+E=Z[atip,]
+rownames(E)=bd$nombre_comuna[atip]
+stars(E,draw.segments=TRUE,key.loc=c(7,1.5),main="Zonas mas atipicas")
+
+
+# Normalidad multivariante
+
+#si los datos fueran normales, la mahalanobis seguiria una chi-cuadrado con p gl
+hist(d,breaks=50,prob=TRUE,main="Mahalanobis",xlab="d2")
+curve(dchisq(x,df=p),add=TRUE,lwd=2)
+
+qqplot(qchisq(ppoints(n),df=p),sort(d),pch=19,cex=0.4,
+       xlab="Cuantiles chi-cuadrado",ylab="Cuantiles observados")
+abline(0,1,lwd=2)
+
+require(MVN)
+mvn(data=X,mvn_test="mardia")   #asimetria y curtosis multivariante
+
+
+# Inferencia multivariada
+
+#Hotelling: la Region Metropolitana contra el resto del pais
+require(DescTools)
+g1=as.matrix(X[bd$codigo_region==13,])
+g2=as.matrix(X[bd$codigo_region!=13,])
+nrow(g1)
+nrow(g2)
+HotellingsT2Test(g1,g2,test="f")
+
+colMeans(g1)-colMeans(g2)   #donde esta la diferencia
+
+#MANOVA: las cinco macrozonas a la vez
+Y=as.matrix(X)
+mmanova=manova(Y~macro)
+summary(mmanova,test="Wilks")
+summary(mmanova,test="Pillai")
+
+#elipsoide de confianza, igual que en la Clase 3
+require(ellipse)
+vx=X$escolaridad
+vy=X$porc_hacinamiento_medio
+V2=cbind(vx,vy)
+mu=colMeans(V2)
+Sg=cov(V2)
+
+plot(vx,vy,pch=19,col="gray70",cex=0.4,xlab="Escolaridad",ylab="Hacinamiento medio",
+     main="Elipse de confianza 95%")
+lines(ellipse(Sg,centre=mu,level=0.95),col="red",lwd=2)
+points(mu[1],mu[2],pch=19,col="blue")
+
+#esa elipse contiene el 95% de las ZONAS (tolerancia)
+#la region para la MEDIA usa S/n y el radio de la formula de la clase:
+#n(xbar-mu)'S^-1(xbar-mu) <= p(n-1)/(n-p) F(p,n-p), aca con p=2
+tt=sqrt(2*(n-1)/(n-2)*qf(0.95,2,n-2))
+lines(ellipse(Sg/n,centre=mu,t=tt),col="darkgreen",lwd=3)
+#queda diminuta: con 4843 zonas la media se estima muy fino
+
+#las mismas dos elipses por macrozona, que es lo que va en la presentacion
+plot(vx,vy,type="n",xlab="Escolaridad",ylab="Hacinamiento medio",
+     main="Tolerancia (fina) y media (gruesa) por macrozona")
+for(i in 1:nlevels(macro)){
+  Xi=V2[macro==levels(macro)[i],]
+  ni=nrow(Xi); mi=colMeans(Xi); Si=cov(Xi)
+  lines(ellipse(Si,centre=mi,level=0.95),col=i,lwd=1)
+  lines(ellipse(Si/ni,centre=mi,t=sqrt(2*(ni-1)/(ni-2)*qf(0.95,2,ni-2))),col=i,lwd=3)
+}
+legend("topright",levels(macro),col=1:5,lwd=2,cex=0.7)
+#las de la media no se solapan, que es justo lo que detecta el MANOVA
+#las de tolerancia se superponen casi entera: las zonas concretas se mezclan
+
+#tambien se puede con car, que es lo que usamos en la Tarea 1
+require(car)
+dataEllipse(vx,vy,levels=c(0.5,0.95),lty=2,fill=TRUE,fill.alpha=0.1,
+            xlab="Escolaridad",ylab="Hacinamiento medio")
+
+
+# Componentes principales
+
+require(psych)
+KMO(R)                       #tiene que pasar de 0.5
+cortest.bartlett(R,n=n)      #si se rechaza, hay estructura que reducir
+
+acp=prcomp(X,scale=TRUE)     #escalado, las variables estan en unidades distintas
+acp
+summary(acp)
+acp$rotation
+head(acp$x)
+
+lambda=acp$sdev^2
+lambda                       #criterio de kaiser: los mayores a 1
+plot(lambda,type="o",pch=20,lwd=2,xlab="Componente",ylab="Valor propio",main="Grafico de codo")
+abline(h=1,col="red",lwd=2)
+cumsum(100*lambda/p)         #porcentaje de varianza acumulada
+
+biplot(acp,cex=c(0.3,0.8),xlabs=rep(".",n))
+
+#comparacion con el indice que trae la base
+cor(acp$x[,1],indice)
+cor(acp$x[,2],indice)
+cor(acp$x[,3],indice)
+
+#descomposicion de la varianza de la CP1: cuanto es de adentro y cuanto de afuera
+#es la V_T = V_a + V_e de la Clase 1, aplicada a region, provincia y comuna
+descomp=function(y,g){
+  vt=mean((y-mean(y))^2)
+  va=sum(tapply(y,g,function(v) mean((v-mean(v))^2)*length(v)))/length(y)
+  c(intra=100*va/vt, inter=100*(1-va/vt))
+}
+for(k in 1:3){
+  cat("CP",k,"\n")
+  print(rbind(Region=descomp(acp$x[,k],bd$codigo_region),
+              Provincia=descomp(acp$x[,k],bd$codigo_provincia),
+              Comuna=descomp(acp$x[,k],bd$codigo_comuna)))
+}
+#en la CP1, dentro de la comuna queda el 64.6% de la variabilidad
+#el fenomeno es submunicipal: comparar comunas promedia realidades opuestas
+
+
+# Analisis factorial
+
+af=factanal(X,factors=3,rotation="varimax")
+af
+
+af2=fa(X,nfactors=3,rotate="varimax",fm="pa")
+af2
+data.frame(Comunalidad=af2$communality,Varianza_especifica=af2$uniquenesses)
+
+cargas=af2$loadings
+plot(cargas,type="n",xlab="Factor 1",ylab="Factor 2")
+text(cargas,labels=rownames(cargas),cex=0.8)
+abline(h=0,v=0,lty=2)
+
+fa.diagram(cargas)
+
+#el otro metodo de estimacion: maxima verosimilitud (factanal) frente a factor principal
+#se comparan las cargas del segundo factor con la congruencia de Tucker
+abs(cong(af$loadings[,2],af2$loadings[,2]))
+
+#analisis paralelo, otra forma de decidir cuantos factores
+fa.parallel(X,fa="fa",fm="ml")
+#con n=4843 el corte al azar queda practicamente en 1, asi que coincide con Kaiser
+
+#estabilidad: se reestiman los factores con la mitad de las zonas y se comparan las cargas
+set.seed(2026)
+mitad=sample(1:n,n/2)
+afA=fa(X[mitad,],nfactors=3,rotate="varimax",fm="pa")
+afB=fa(X[-mitad,],nfactors=3,rotate="varimax",fm="pa")
+factor.congruence(afA,afB)   #cerca de 1 significa que salen los mismos factores
+
+
+# Clustering jerarquico
+
+hc1=hclust(D,"single")
+hc2=hclust(D,"complete")
+hc3=hclust(D,"average")
+hc4=hclust(D^2,"centroid")   #el centroide se define sobre distancias al cuadrado
+hc5=hclust(D,"ward.D2")
+
+plot(hc5,labels=FALSE,hang=-1,ylab="Distancia",xlab="Zonas",main="Ward")
+
+#criterio de mojena, las dos versiones
+moj1=mean(hc5$height)+2.25*sd(hc5$height)
+ric=quantile(hc5$height,0.75)-quantile(hc5$height,0.25)
+moj2=as.numeric(median(hc5$height)+2.25*ric/2)
+abline(h=moj1,col="red",lwd=2)
+abline(h=moj2,col="blue",lwd=2)
+length(which(hc5$height>moj1))+1
+length(which(hc5$height>moj2))+1
+#con 4843 zonas las dos reglas dan demasiados grupos, sirven como cota, no como corte
+
+#que hace cada enlace si se corta en 4 grupos
+#se cortan los cinco en el mismo k: comparando enlaces hay que dejar fijo
+#todo lo demas, si no cambiarian por el enlace y por el corte a la vez
+for(hc in list(hc1,hc2,hc3,hc4,hc5)) print(table(cutree(hc,4)))
+#los cuatro primeros dejan casi todas las zonas en un solo grupo (encadenamiento)
+#ward es el unico que reparte, se sigue con ese
+
+#de donde sale el 4: el grupo mas chico y su % de extranjeros al mover k
+for(k in 2:8){
+  g=cutree(hc5,k)
+  me=which.min(table(g))
+  cat(k, min(table(g)), round(mean(bd$porc_pob_ext[g==as.integer(names(me))]),1), "\n")
+}
+#hasta k=3 el menor son 731 zonas con 12.7% de extranjeros, el enclave sigue mezclado
+#en k=4 pasa a 198 con 29.3% (el pais esta en 4.5%) y en k=5 y 6 ya no cambia
+#en k=7 se rompe en 160 y 38, asi que 4 es el primero que lo aisla y lo deja entero
+
+grupos=cutree(hc5,4)
+table(grupos)
+100*table(grupos)/n
+
+perfil=aggregate(.~grupos,cbind(X,grupos),mean)
+perfil
+tapply(indice,grupos,mean)   #el indice oficial ordena los grupos de menor a mayor carencia
+
+#el grupo mas chico es el que interesa: pocas zonas, perfil muy distinto
+enclave=as.numeric(names(which.min(table(grupos))))
+enclave
+sort(table(bd$nombre_comuna[grupos==enclave]),decreasing=TRUE)[1:6]
+
+
+# Validacion de los conglomerados
+
+require(cluster)
+require(clusterCrit)
+require(factoextra)
+
+si=silhouette(grupos,D)
+summary(si)$avg.width
+fviz_silhouette(si)
+
+intCriteria(as.matrix(Z),grupos,crit="dunn")
+
+K=10
+sil=NULL
+dunn=NULL
+for(i in 2:K){
+  g=cutree(hc5,k=i)
+  sil[i-1]=intCriteria(as.matrix(Z),g,crit="silhouette")$silhouette
+  dunn[i-1]=intCriteria(as.matrix(Z),g,crit="dunn")$dunn
+}
+par(mfrow=c(2,1))
+plot(2:K,sil,type="o",pch=20,lwd=2,xlab="k",ylab="Silueta")
+plot(2:K,dunn,type="o",pch=20,lwd=2,xlab="k",ylab="Dunn")
+par(mfrow=c(1,1))
+#los indices premian k=2, pero con 2 grupos se pierde el enclave, se deja k=4
+
+
+# Clustering particional
+
+KM=kmeans(Z,4,nstart=25)
+table(KM$cluster)
+summary(silhouette(KM$cluster,D))$avg.width
+fviz_cluster(list(data=Z,cluster=KM$cluster),geom="point",ellipse=TRUE,
+             palette="jco",ggtheme=theme_classic())
+
+cl1=clara(Z,k=4,metric="euclidean",samples=50)
+table(cl1$clustering)
+cl1$silinfo$avg.width
+fviz_cluster(list(data=Z,cluster=cl1$clustering),geom="point",ellipse=TRUE,
+             palette="jco",ggtheme=theme_classic())
+
+#los tres algoritmos frente a frente
+table(grupos,KM$cluster)
+table(grupos,cl1$clustering)
+#kmeans y clara parten el grupo grande y se comen el chico, ward es el que conserva el enclave
+
+
+# Analisis de correspondencia
+
+require(ca)
+Tab=table(macro,grupos)
+Tab
+chisq.test(Tab)
+as.numeric(chisq.test(Tab)$statistic)/sum(Tab)   #inercia total
+
+ac=ca(Tab)
+summary(ac)
+plot(ac)
+
+round(100*prop.table(Tab,1),1)   #perfil de cada macrozona
+
+
+# Clasificacion supervisada
+
+#se predice el enclave con las 8 variables
+datos=data.frame(X,y=as.numeric(grupos==enclave))
+table(datos$y)
+
+logistic=glm(y~.,data=datos,family="binomial")
+summary(logistic)
+prob=predict(logistic,type="response")
+class=ifelse(prob>0.5,1,0)
+t0=table(datos$y,class)
+t0
+accuracy=sum(diag(t0))/sum(t0)
+accuracy
+
+#validacion cruzada, para no evaluar con los mismos datos con que se ajusto
+set.seed(2026)
+folds=sample(rep_len(1:10,n))
+prob=rep(0,n)
+for(k in 1:10){
+  m=glm(y~.,data=datos[folds!=k,],family="binomial")
+  prob[folds==k]=predict(m,newdata=datos[folds==k,],type="response")
+}
+
+require(ROCR)
+pred=prediction(prob,datos$y)
+perf=performance(pred,"tpr","fpr")
+plot(perf,lwd=2)
+abline(0,1,lty=2)
+auc=performance(pred,"auc")@y.values[[1]]
+auc
+
+require(pROC)
+objeto_roc=roc(datos$y,prob)
+valores_optimos=coords(objeto_roc,x="best",best.method="youden")
+valores_optimos    #umbral, especificidad y sensibilidad
+
+#la matriz de confusion en los dos cortes que van en la lamina
+corte=function(u){
+  t0=table(datos$y,factor(ifelse(prob>u,1,0),levels=c(0,1)))
+  cat("umbral",round(u,4),
+      " sens",round(100*t0[2,2]/sum(t0[2,]),1),
+      " esp",round(100*t0[1,1]/sum(t0[1,]),1),
+      " acierto",round(100*sum(diag(t0))/sum(t0),1),"\n")
+  print(t0)
+}
+corte(valores_optimos$threshold)   #corte de Youden: maximiza sens+esp-1
+corte(0.5)                          #corte estricto: prioriza evitar falsas alarmas
+
+#lo mismo usando como unico predictor el indice de deprivacion de la base
+datos2=data.frame(indice=indice,y=datos$y)
+prob2=rep(0,n)
+for(k in 1:10){
+  m=glm(y~.,data=datos2[folds!=k,],family="binomial")
+  prob2[folds==k]=predict(m,newdata=datos2[folds==k,],type="response")
+}
+pred2=prediction(prob2,datos2$y)
+performance(pred2,"auc")@y.values[[1]]
+plot(performance(pred2,"tpr","fpr"),add=TRUE,col="red",lwd=2)
+legend("bottomright",c("8 variables","solo el indice"),col=c("black","red"),lwd=2)
+
+coords(roc(datos2$y,prob2),x="best",best.method="youden")
+#el indice por si solo no separa el enclave, las 8 variables si
