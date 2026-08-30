@@ -27,6 +27,16 @@ format:
     include-in-header:
       - text: |
           <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
+          <meta property="og:type" content="website">
+          <meta property="og:site_name" content="Carlos Pizarro Fuentes">
+          <meta property="og:title" content="La deprivación urbana en Chile no es unidimensional">
+          <meta property="og:description" content="Análisis multivariante de 4.843 zonas censales urbanas del Censo 2017: componentes principales, análisis factorial, clustering y clasificación.">
+          <meta property="og:url" content="https://cpizarrof.github.io/deprivacion-multivariante/">
+          <meta property="og:image" content="https://cpizarrof.github.io/deprivacion-multivariante/preview.png">
+          <meta property="og:image:width" content="1200">
+          <meta property="og:image:height" content="630">
+          <meta name="twitter:card" content="summary_large_image">
+          <meta name="description" content="Análisis multivariante de 4.843 zonas censales urbanas del Censo 2017: componentes principales, análisis factorial, clustering y clasificación.">
     include-after-body:
       - text: |
           <script>
