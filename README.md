@@ -18,7 +18,7 @@ no se sostiene:
 
 - Hacen falta **tres dimensiones**, no una. Las tres primeras componentes principales
   explican el 75,6 % de la varianza, y la segunda vale por sí sola el 24,7 %.
-- El índice oficial **no ve la segunda dimensión**: correlaciona 0,907 con la primera
+- El índice **no ve la segunda dimensión**: correlaciona 0,907 con la primera
   componente, pero −0,337 con la segunda.
 - Hay **198 zonas** con las peores condiciones de vivienda del país —29,3 % de
   población extranjera frente al 4,5 % nacional, y 3,1 % de hacinamiento crítico— a
